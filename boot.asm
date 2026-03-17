@@ -6,31 +6,60 @@
 [BITS 16]           ; 16 bit real mode
 [ORG 0x7C00]        ; code loaded at address 0x7C00
 
+; OS Versions for debugging
+%assign VER_MAJOR 0 
+%assign VER_MINOR 1
+%assign VER_PATCH 0
+%assign VER_BOOTLOADER 0
+
+
+;   convert the version numbers to strings
+; versions of OS
+%defstr VER_MAJOR_STR VER_MAJOR
+%defstr VER_MINOR_STR VER_MINOR
+%defstr VER_PATCH_STR VER_PATCH
+; bootloader release
+%defstr VER_BOOTLOADER_STR VER_BOOTLOADER
+
 start:
     mov ax, 0           ; set up registers for the data segment
     mov ds, ax
     mov es, ax
     
-    mov si, boot message     ; SI is the address of the message string
+    mov si, boot_msg     ; SI is the address of the message string, print the boot header
     call print_string
 
     ; load the kernel from disk sector 2, 1 is bootloader
     mov ax, 0x0201              ; AH = 0x02 (read), AL=0x01 (1 sector)
     mov bx, 0x7E00              ; Load the kernel at 0x7E00 (right after the bootloader which is at 7c00)
-    mov cx, 0x0002
-    mov dx, 0x0000
-    int 0x13
+    mov cx, 0x0002              ; CX = cylinder 0, sector 2
+    mov dx, 0x0000              ; DX = drive 0 (first floppy or disk), head 0
+    int 0x13                    ; Bios disk read interrupt
+
+    jc .disk_error              ; if carry flag set, disk read has failed :( sadness
+
+    mov si, kernel_msg          ; Move kernel_message into source index
+    call print_string           ; print source index and thus kernel_msg
+
+    jmp 0x7E00                  ; Jump to kernel
 
 
+.disk_error:
+    mov si, disk_error_msg           ; move error message into source index
+    call print_string           ; print the source index (and thus the error message)
+    jmp halt                    ; jump to the halt command
 
+; command for bootloader to print text to console
 print_string:
-    lodsb               ; Load byte from [ds:si] into al, increment si
+    lodsb               ; Load byte from [ds:si] into al, increment si, ds is data segment default for reading data
     cmp al, 0           ; is the byte the null terminator?
     je .done            ; if it's yes then the program's done
 
     mov ah, 0x0E        ; BIOS teletype output
     int 0x10            ; Call bios video interrupt
     jmp print_string    ; loop to the next character
+
+
 
 .done:
     ret                 ; return from subroutine
@@ -41,10 +70,19 @@ halt:
     jmp halt            ; infinite loop just in case
 
 
-message:
-    db "Hello from SuperCodeOS", 0      ; Null-terminated string
+boot_msg:
+    db "SuperCodeOS v", VER_MAJOR_STR, ".", VER_MINOR_STR, ".", VER_PATCH_STR, 13, 10        ; Dynamic OS version numbering
+    db "BOOTLOADER v", VER_BOOTLOADER_STR, 13, 10           ; output bootloader version
+    db "Loading interactive kernel...", 13, 10, 0 
 
-; padding to fill space with zeros
+kernel_msg:
+    db "Kernel successfully loaded. Jumping...", 13, 10, 0          ; kernel loaded message
+
+disk_error_msg:
+    db "DISK ERROR: Failed to load kernel.", 13, 10, 0
+
+
+; padding to fill space with zeros so it is 510 bytes
 times (510 - ($ - $$)) db 0
 
 
