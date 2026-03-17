@@ -1,4 +1,4 @@
-; SuperCodeOS 512-byte initial bootloader
+; CircleOS 512-byte initial bootloader
 ; Made by Ruben Sutton
 ; Last updated: 17 March 2026
 ; Find me at https://scstudios.tech
@@ -71,7 +71,7 @@ halt:
 
 
 boot_msg:
-    db "SuperCodeOS v", VER_MAJOR_STR, ".", VER_MINOR_STR, ".", VER_PATCH_STR, 13, 10        ; Dynamic OS version numbering
+    db "CircleOS v", VER_MAJOR_STR, ".", VER_MINOR_STR, ".", VER_PATCH_STR, " by SuperCode Studios", 13, 10        ; Dynamic OS version numbering
     db "BOOTLOADER v", VER_BOOTLOADER_STR, 13, 10           ; output bootloader version
     db "Loading interactive kernel...", 13, 10, 0 
 
