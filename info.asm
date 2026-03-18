@@ -1,0 +1,96 @@
+; info.asm - Display system information
+; Shows boot info and memory layout
+
+bits 16
+org 0xA000
+
+start:
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+
+    mov si, msg_title
+    call sys_puts
+
+    mov si, msg_signature
+    call sys_puts
+    
+    ; Read boot info signature from 0x0500
+    mov ax, [0x0500]
+    call print_hex16
+
+    mov si, msg_version
+    call sys_puts
+    
+    ; Read boot info version
+    mov al, [0x0502]
+    call print_hex8
+
+    mov si, msg_drive
+    call sys_puts
+    
+    ; Read boot info drive number
+    mov al, [0x0503]
+    call print_hex8
+
+    mov si, msg_sectors
+    call sys_puts
+    
+    ; Read boot info sector count
+    mov ax, [0x0504]
+    call print_hex16
+
+    mov si, msg_memory
+    call sys_puts
+
+    ret
+
+print_hex16:
+    push ax
+    mov al, ah
+    call print_hex8
+    pop ax
+    call print_hex8
+    ret
+
+print_hex8:
+    push ax
+    shr al, 4
+    call print_hex_digit
+    pop ax
+    call print_hex_digit
+    ret
+
+print_hex_digit:
+    and al, 0x0F
+    cmp al, 0x0A
+    jl .is_digit
+    add al, 'A' - 0x0A
+    jmp .print_it
+.is_digit:
+    add al, '0'
+.print_it:
+    mov ah, al
+    xor ax, ax
+    mov al, ah
+    mov ah, 0           ; SYS_PUTC
+    int 0x80
+    ret
+
+sys_puts:
+    mov ah, 1           ; SYS_PUTS
+    int 0x80
+    ret
+
+msg_title:
+    db "=== System Information ===", 0x0A, 0
+msg_signature:
+    db "Boot signature: 0x", 0
+msg_version:
+    db 0x0A, "Boot version: 0x", 0
+msg_drive:
+    db 0x0A, "Boot drive: 0x", 0
+msg_sectors:
+    db 0x0A, "Kernel sectors: 0x", 0
+msg_memory:
+    db 0x0A, "Memory: 640KB available", 0x0A, 0

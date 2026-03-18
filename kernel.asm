@@ -15,6 +15,22 @@ SYSCALL_INT equ 0x80
 SYS_PUTC equ 0x01
 SYS_PUTS equ 0x02
 SYS_NEWLINE equ 0x03
+SYS_GETC equ 0x04
+SYS_CLEAR equ 0x05
+SYS_RUN equ 0x06
+
+%ifndef FS_TABLE_SECTOR
+FS_TABLE_SECTOR equ 17
+%endif
+
+%ifndef SHELL_SECTORS
+SHELL_SECTORS equ 1
+%endif
+
+PROG_TABLE_ADDR equ 0x0600
+PROG_TABLE_MAX_ENTRIES equ 8
+PROG_ENTRY_SIZE equ 16
+PROG_NAME_LEN equ 8
 
 
 start:
@@ -30,6 +46,9 @@ start:
     mov al, [BOOT_DRIVE_OFF]
     mov [kernel_boot_drive], al
     call install_syscall_vector
+    call load_program_table
+    cmp ah, 0
+    jne .prog_table_bad
 
     mov si, welcome_msg    ; move boot message to source
     call console_puts   ; calls print string (prints SI)
@@ -39,6 +58,12 @@ start:
 .boot_info_bad:
     mov si, boot_info_bad_msg   ; boot info bad handler, alerts if boot info bad
     call console_puts
+    jmp halt
+
+.prog_table_bad:
+    mov si, prog_table_bad_msg
+    call console_puts
+    call console_newline
     jmp halt
 
 ; begin main shell loop
@@ -98,94 +123,40 @@ start:
     mov si, cx
     mov byte [bx + si], 0       ;null terminate the command so routines know where it ends
 
-    mov ah, 0x0E                ; set for printing
-    mov al, 13                  ; 13 is CR (or new line)
-    int 0x10                    ; print character to screen
-    mov al, 10
-    int 0x10
+    call console_newline
 
-    ; simple command parser, just match by first character
-    mov si, command_buf
-    lodsb                       ; puts si into al and increments si
-
-    cmp al, 'h'                 ; help?
-    je .cmd_help
-
-    cmp al, 'e'                 ; echo?
-    je .cmd_echo
-
-    cmp al, 'c'                 ; clear
-    je .cmd_clear
-
-    cmp al, 0                   ; empty command?
+    ; Exact command dispatch
+    cmp byte [command_buf], 0
     je .shell_loop
 
-    mov si, unknown_msg         ; unknown command message
+    ; help
+    mov si, command_buf
+    mov di, cmd_help_str
+    call str_eq
+    cmp al, 1
+    je .cmd_help
+
+    ; csh
+    mov si, command_buf
+    mov di, cmd_csh_str
+    call str_eq
+    cmp al, 1
+    je .cmd_csh
+
+    ; Unknown command
+    mov si, unknown_msg
     call console_puts
+    call console_newline
     jmp .shell_loop
 
 .cmd_help:
     mov si, help_msg
     call console_puts
+    call console_newline
     jmp .shell_loop
-
-.cmd_echo:
-    ; assumes command starts with "echo ", skips as prefix
-    mov si, command_buf
-    inc si                      ; skip 'e'
-    lodsb                       ; consume 'c'
-    lodsb                       ; consume 'h'
-    lodsb                       ; consume 'o'
-    lodsb                       ; consume ' ' or 0 if just echo without space
-
-    cmp al, 0
-    je .shell_loop              ; if al is 0 then there was nothing after 'echo' so no command
-
-    dec si
-    call console_puts
-
-    ; newline after echoed text
-    mov ah, 0x0E
-    mov al, 13                  ; CR
-    int 0x10
-    mov al, 10                  ; line feed
-    int 0x10
-
+.cmd_csh:
+    call launch_shell
     jmp .shell_loop
-
-.cmd_clear:
-    ;clear using bios scroll up function
-    ; int 10 ah 06 is scroll
-    ; al is lines to scroll 0 is clear Available
-    ; bh is attribute of blank lines
-    ; cx is upper left
-    ; dx is lower right
-    mov ah, 0x06
-    mov al, 0
-    mov bh, 0x07
-    mov cx, 0
-    mov dx, 0x184F
-    int 0x10                    ; bios video services
-
-    ; put cursor at top left through video int with ah=06h
-    mov ah, 0x02
-    mov bh, 0
-    mov dx, 0
-    int 0x10
-
-    jmp .shell_loop
-
-; print_string:
-;    lodsb               ; Load byte from [ds:si] into al, increment si, ds is data segment default for reading data
-;    cmp al, 0           ; is the byte the null terminator?
-;    je .done            ; if it's yes then the program's done
-;
-;    mov ah, 0x0E        ; BIOS teletype output
-;    int 0x10            ; Call bios video interrupt
-;    jmp print_string    ; loop to the next character
-    
-.done:
-    ret
 
 kernel_boot_drive:
     db 0
@@ -224,6 +195,21 @@ console_newline:
     call console_putc
     ret
 
+; clears text mode screen and moves cursor to top-left
+console_clear:
+    mov ah, 0x06
+    mov al, 0
+    mov bh, 0x07
+    mov cx, 0
+    mov dx, 0x184F
+    int 0x10
+
+    mov ah, 0x02
+    mov bh, 0
+    mov dx, 0
+    int 0x10
+    ret
+
 ; wait for keypress and return it
 ; output al = ascii, ah = scan code
 ; clobbers ah and al
@@ -258,6 +244,15 @@ syscall_handler:
     cmp ah, SYS_NEWLINE
     je .sys_newline
 
+    cmp ah, SYS_GETC
+    je .sys_getc
+
+    cmp ah, SYS_CLEAR
+    je .sys_clear
+
+    cmp ah, SYS_RUN
+    je .sys_run
+
     mov ah, 0xFF
     jmp .done
 
@@ -274,6 +269,19 @@ syscall_handler:
 .sys_newline:
     call console_newline
     xor ah, ah
+    jmp .done
+
+.sys_getc:
+    call kbd_getc
+    jmp .done
+
+.sys_clear:
+    call console_clear
+    xor ah, ah
+    jmp .done
+
+.sys_run:
+    call run_named_program
     jmp .done
 
 .done:
@@ -353,6 +361,196 @@ disk_read_chs:
     stc                               ; explicit failure
     ret
 
+
+; str_eq
+; Input:  DS:SI = string A, DS:DI = string B
+; Output: AL = 1 if equal, 0 if not
+; Clobbers: AL, BL
+str_eq:
+.eq_loop:
+    mov al, [si]
+    mov bl, [di]
+    cmp al, bl
+    jne .no
+    cmp al, 0
+    je .yes
+    inc si
+    inc di
+    jmp .eq_loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    mov al, 0
+    ret
+
+
+; str_startswith
+; Input:  DS:SI = full string, DS:DI = prefix
+; Output: AL = 1 if SI starts with DI, else 0
+; Clobbers: AL, BL
+str_startswith:
+.sw_loop:
+    mov al, [di]
+    cmp al, 0
+    je .yes
+    mov bl, [si]
+    cmp bl, al
+    jne .no
+    inc si
+    inc di
+    jmp .sw_loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    mov al, 0
+    ret
+
+
+launch_shell:
+    ; Load csh to 0000:9000
+    mov ax, 0
+    mov es, ax
+    mov bx, 0x9000
+
+    mov al, SHELL_SECTORS      ; shell sector count from build
+    mov ch, 0                 ; cylinder 0
+    mov cl, [BOOT_KSECT_OFF]  ; kernel sectors from boot info
+    add cl, 2                 ; shell starts after boot(1) + kernel
+    mov dh, 0                 ; head 0
+
+    call disk_read_chs
+    jc .load_fail
+
+    call 0x9000               ; run shell, return to kernel when shell does RET
+    ret
+
+.load_fail:
+    mov si, shell_load_fail_msg
+    call console_puts
+    call console_newline
+    ret
+
+; load_program_table
+; Reads a tiny filesystem program table from FS_TABLE_SECTOR into PROG_TABLE_ADDR.
+; Output: AH = 0 success, 1 read fail, 2 bad magic, 3 bad entry count
+load_program_table:
+    mov ax, 0
+    mov es, ax
+    mov bx, PROG_TABLE_ADDR
+    mov al, 1
+    mov ch, 0
+    mov cl, FS_TABLE_SECTOR
+    mov dh, 0
+    call disk_read_chs
+    jc .read_fail
+
+    cmp byte [PROG_TABLE_ADDR + 0], 'C'
+    jne .bad_magic
+    cmp byte [PROG_TABLE_ADDR + 1], 'F'
+    jne .bad_magic
+    cmp byte [PROG_TABLE_ADDR + 2], 'S'
+    jne .bad_magic
+    cmp byte [PROG_TABLE_ADDR + 3], '1'
+    jne .bad_magic
+
+    mov al, [PROG_TABLE_ADDR + 4]
+    cmp al, PROG_TABLE_MAX_ENTRIES
+    ja .bad_count
+    mov [prog_table_count], al
+    mov byte [prog_table_loaded], 1
+    xor ah, ah
+    ret
+
+.read_fail:
+    mov byte [prog_table_loaded], 0
+    mov ah, 1
+    ret
+
+.bad_magic:
+    mov byte [prog_table_loaded], 0
+    mov ah, 2
+    ret
+
+.bad_count:
+    mov byte [prog_table_loaded], 0
+    mov ah, 3
+    ret
+
+; run_named_program
+; Input: DS:SI = null-terminated program name
+; Output: AH = status (0=ok, 1=unknown name, 2=load fail, 3=fs unavailable)
+run_named_program:
+    cmp byte [prog_table_loaded], 1
+    jne .fs_unavailable
+
+    mov [run_name_ptr], si
+    xor bx, bx
+
+.search_loop:
+    cmp bl, [prog_table_count]
+    jae .unknown
+
+    ; DI = PROG_TABLE_ADDR + 16 + (index * PROG_ENTRY_SIZE)
+    xor ax, ax
+    mov al, bl
+    shl ax, 4
+    mov di, PROG_TABLE_ADDR + 16
+    add di, ax
+
+    mov si, [run_name_ptr]
+    call str_eq
+    cmp al, 1
+    je .found
+
+    inc bl
+    jmp .search_loop
+
+.found:
+    ; Recompute entry pointer in DI
+    xor ax, ax
+    mov al, bl
+    shl ax, 4
+    mov di, PROG_TABLE_ADDR + 16
+    add di, ax
+
+    ; Entry layout:
+    ; +0..+7  name[8]
+    ; +8      start_sector
+    ; +9      sector_count
+    ; +10..11 load_offset
+    ; +12..13 entry_offset
+
+    mov ax, 0
+    mov es, ax
+    mov bx, [di + 10]
+    mov al, [di + 9]
+    mov ch, 0
+    mov cl, [di + 8]
+    mov dh, 0
+    call disk_read_chs
+    jc .load_fail
+
+    mov bx, [di + 10]
+    add bx, [di + 12]
+    call bx
+
+    xor ah, ah
+    ret
+
+.unknown:
+    mov ah, 1
+    ret
+
+.load_fail:
+    mov ah, 2
+    ret
+
+.fs_unavailable:
+    mov ah, 3
+    ret
+
 ; ----------------------------------
 ; disk_read_chs scratch state (kernel globals)
 ; ----------------------------------
@@ -371,27 +569,42 @@ dr_retries:
 dr_last_status:
     db 0
 
+prog_table_loaded:
+    db 0
+prog_table_count:
+    db 0
+run_name_ptr:
+    dw 0
+
 
 ; --------------------------------DATA SECTION------------------------------------
 welcome_msg:
     db "Welcome to CircleOS v0.1.0!", 13, 10, 0
 
 help_msg:
-    db "Available commands:", 13, 10
+    db "Available kernel commands:", 13, 10
     db "  help   - show this message", 13, 10
-    db "  echo   - echo text back", 13, 10
-    db "  clear  - clear the screen", 13, 10, 0
+    db "  csh    - launch Circle shell", 13, 10, 0
 
 prompt:
     db "CircleOS Kernel > ", 0
 
 unknown_msg:
-    db "Unknown command. Type 'help' for commands.", 13, 10, 0
+    db "Unknown kernel command. Type 'csh' to open shell.", 13, 10, 0
 
 boot_info_bad_msg:
     db "BOOT INFO INVALID", 13, 10, 0
 
+prog_table_bad_msg:
+    db "Program table load failed", 0
 
+cmd_help_str:
+    db "help", 0
+cmd_csh_str:
+    db "csh", 0
+
+shell_load_fail_msg:
+    db "Failed to load csh", 0
 command_buf:
     times 32 db 0   ; input storage.
 
