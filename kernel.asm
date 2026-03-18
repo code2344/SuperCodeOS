@@ -4,14 +4,36 @@
 [BITS 16]           ; assemble these instructions for 16-bit mode
 [ORG 0x7E00]        ; this code lives at 0x7e00
 
+BOOT_INFO_ADDR equ 0x0500
+BOOT_SIG0_OFF equ BOOT_INFO_ADDR + 0
+BOOT_SIG1_OFF equ BOOT_INFO_ADDR + 1
+BOOT_VER_OFF equ BOOT_INFO_ADDR + 2
+BOOT_DRIVE_OFF equ BOOT_INFO_ADDR + 3
+BOOT_KSECT_OFF equ BOOT_INFO_ADDR + 4
+
+
 start:
     mov ax, 0           ; clear register AX temporarily to initialise segment registers
     mov ds, ax          ; clear and initialise data segment
     mov es, ax          ; clear and initialise extra segment
 
+    cmp byte [BOOT_SIG0_OFF], 'C'
+    jne .boot_info_bad
+    cmp byte [BOOT_SIG1_OFF], 'B'
+    jne .boot_info_bad
+
+    mov al, [BOOT_DRIVE_OFF]
+    mov [kernel_boot_drive], al
+
     mov si, welcome_msg    ; move boot message to source
     call print_string   ; calls print string (prints SI)
+    jmp .shell_loop
+    
 
+.boot_info_bad:
+    mov si, boot_info_bad_msg   ; boot info bad handler, alerts if boot info bad
+    call print_string
+    jmp halt
 
 ; begin main shell loop
 .shell_loop:
@@ -157,6 +179,9 @@ print_string:
 .done:
     ret
 
+kernel_boot_drive:
+    db 0
+
 ; text data
 welcome_msg:
     db "Welcome to CircleOS v0.1.0!", 13, 10, 0
@@ -173,6 +198,12 @@ prompt:
 unknown_msg:
     db "Unknown command. Type 'help' for commands.", 13, 10, 0
 
+boot_info_bad_msg:
+    db "BOOT INFO INVALID", 13, 10, 0
+
+halt:
+    hlt                 ; halt the cpu
+    jmp halt            ; infinite loop just in case
 command_buf:
     times 32 db 0   ; input storage.
 
