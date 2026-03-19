@@ -22,4 +22,5 @@ start:
     ret
 
 demo_msg:
-    db "demo program executed", 0
+    db "demo program executed",
+    db "Hello from CSH", 0

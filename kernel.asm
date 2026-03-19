@@ -596,7 +596,7 @@ run_name_ptr:
 
 ; --------------------------------DATA SECTION------------------------------------
 welcome_msg:
-    db "Welcome to CircleOS v0.1.3!", 13, 10, 0
+    db "Welcome to CircleOS v0.1.6!", 13, 10, 0
 
 help_msg:
     db "Available kernel commands:", 13, 10

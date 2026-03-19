@@ -26,6 +26,6 @@ sys_puts:
     ret
 
 msg_welcome:
-    db "=== Welcome to CircleOS ===", 0x0A, 0
+    db "=== Welcome to CircleOS ===", 13, 10, 0
 msg_feature:
-    db "This is a simple x86 real-mode operating system!", 0x0A, 0
+    db "This is a simple x86 real-mode operating system!", 13, 10, 0

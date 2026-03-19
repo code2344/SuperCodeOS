@@ -60,10 +60,10 @@ sys_puts:
     ret
 
 msg_title:
-    db "=== Program Statistics ===", 0x0A, 0
+    db "=== Program Statistics ===", 13, 10, 0
 msg_count:
     db "Total programs: ", 0
 msg_memory_layout:
-    db 0x0A, "Memory: Kernel=0x7E00, Shell=0x9000, User=0xA000", 0x0A, 0
+    db 13, 10, "Memory: Kernel=0x7E00, Shell=0x9000, User=0xA000", 13, 10, 0
 
 prog_count: db 0

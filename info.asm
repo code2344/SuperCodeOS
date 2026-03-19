@@ -84,14 +84,14 @@ sys_puts:
     ret
 
 msg_title:
-    db "=== System Information ===", 0x0A, 0
+    db "=== System Information ===", 13, 10, 0
 msg_signature:
     db "Boot signature: 0x", 0
 msg_version:
-    db 0x0A, "Boot version: 0x", 0
+    db 13, 10, "Boot version: 0x", 0
 msg_drive:
-    db 0x0A, "Boot drive: 0x", 0
+    db 13, 10, "Boot drive: 0x", 0
 msg_sectors:
-    db 0x0A, "Kernel sectors: 0x", 0
+    db 13, 10, "Kernel sectors: 0x", 0
 msg_memory:
-    db 0x0A, "Memory: 640KB available", 0x0A, 0
+    db 13, 10, "Memory: 640KB available", 13, 10, 0
