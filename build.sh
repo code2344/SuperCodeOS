@@ -41,16 +41,6 @@ echo "Kernel size: $KERNEL_SIZE bytes, which is $KERNEL_SECTORS sectors"
 PROGRAM_START_SECTOR=$((1 + KERNEL_SECTORS + SHELL_SECTORS + 1))
 echo "Programs start at sector $PROGRAM_START_SECTOR"
 
-nasm demo.asm -o build/demo.bin
-if [ $? -ne 0 ]; then
-    echo "Error assembling demo.asm"
-    exit 1
-fi
-DEMO_SIZE=$(stat -f%z "build/demo.bin")
-DEMO_SECTORS=$(( (DEMO_SIZE + 511) / 512 ))
-DEMO_SECTOR=$PROGRAM_START_SECTOR
-echo "demo.asm assembled (size: $DEMO_SIZE bytes = $DEMO_SECTORS sectors, sector $DEMO_SECTOR)"
-
 nasm ls.asm -o build/ls.bin
 if [ $? -ne 0 ]; then
     echo "Error assembling ls.asm"
@@ -58,7 +48,7 @@ if [ $? -ne 0 ]; then
 fi
 LS_SIZE=$(stat -f%z "build/ls.bin")
 LS_SECTORS=$(( (LS_SIZE + 511) / 512 ))
-LS_SECTOR=$((DEMO_SECTOR + DEMO_SECTORS))
+LS_SECTOR=$PROGRAM_START_SECTOR
 echo "ls.asm assembled (size: $LS_SIZE bytes = $LS_SECTORS sectors, sector $LS_SECTOR)"
 
 nasm info.asm -o build/info.bin
@@ -139,7 +129,6 @@ DIR_SECTOR=$LS_SECTOR
 DIR_SECTORS=$LS_SECTORS
 
 nasm -DFS_TABLE_SECTOR=$FS_TABLE_SECTOR \
-    -DDEMO_SECTOR=$DEMO_SECTOR -DDEMO_SECTORS=$DEMO_SECTORS \
     -DLS_SECTOR=$LS_SECTOR -DLS_SECTORS=$LS_SECTORS \
     -DINFO_SECTOR=$INFO_SECTOR -DINFO_SECTORS=$INFO_SECTORS \
     -DSTAT_SECTOR=$STAT_SECTOR -DSTAT_SECTORS=$STAT_SECTORS \
@@ -188,7 +177,6 @@ echo "writing filesystem table to disk image (sector $FS_TABLE_SECTOR)"
 dd if=build/fs_table.bin of=build/circleos.img bs=512 seek=$((FS_TABLE_SECTOR - 1)) count=1 conv=notrunc 2>/dev/null
 
 echo "writing programs to disk"
-dd if=build/demo.bin of=build/circleos.img bs=512 seek=$((DEMO_SECTOR - 1)) count=$DEMO_SECTORS conv=notrunc 2>/dev/null
 dd if=build/ls.bin of=build/circleos.img bs=512 seek=$((LS_SECTOR - 1)) count=$LS_SECTORS conv=notrunc 2>/dev/null
 dd if=build/info.bin of=build/circleos.img bs=512 seek=$((INFO_SECTOR - 1)) count=$INFO_SECTORS conv=notrunc 2>/dev/null
 dd if=build/stat.bin of=build/circleos.img bs=512 seek=$((STAT_SECTOR - 1)) count=$STAT_SECTORS conv=notrunc 2>/dev/null
@@ -203,7 +191,6 @@ echo "Sector layout:"
 echo "  1: bootloader"
 echo "  2-$((1 + KERNEL_SECTORS)): kernel"
 echo "  $((2 + KERNEL_SECTORS))-$((1 + KERNEL_SECTORS + SHELL_SECTORS)): shell (csh)"
-echo "  $DEMO_SECTOR-$((DEMO_SECTOR + DEMO_SECTORS - 1)): demo program"
 echo "  $LS_SECTOR-$((LS_SECTOR + LS_SECTORS - 1)): ls program"
 echo "  $INFO_SECTOR-$((INFO_SECTOR + INFO_SECTORS - 1)): info program"
 echo "  $STAT_SECTOR-$((STAT_SECTOR + STAT_SECTORS - 1)): stat program"

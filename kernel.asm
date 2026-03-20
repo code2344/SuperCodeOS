@@ -22,33 +22,24 @@ SYS_READ_RAW equ 0x07
 SYS_WRITE_RAW equ 0x08
 
 %ifndef DEBUG
-%assign DEBUG 0
+%define DEBUG 0
 %endif
 
 %ifndef FS_TABLE_SECTOR
-FS_TABLE_SECTOR equ 17
+FS_TABLE_SECTOR equ 20
 %endif
 
 %ifndef SHELL_SECTORS
-SHELL_SECTORS equ 1
+SHELL_SECTORS equ 2
 %endif
 
 PROG_TABLE_ADDR equ 0x0600
 PROG_TABLE_MAX_ENTRIES equ 16
-PROG_ENTRY_SIZE equ 16
-PROG_NAME_LEN equ 8
-
 
 start:
-    mov ax, 0           ; clear register AX temporarily to initialise segment registers
-    mov ds, ax          ; clear and initialise data segment
-    mov es, ax          ; clear and initialise extra segment
-
-    ; Early protected-mode groundwork:
-    ; 1) enable A20 so addresses above 1MB are usable later
-    ; 2) load a flat GDT so we can transition in a later phase
-    call enable_a20
-    call load_boot_gdt
+    mov ax, 0
+    mov ds, ax
+    mov es, ax
 
     cmp byte [BOOT_SIG0_OFF], 'C'
     jne .boot_info_bad
@@ -57,23 +48,23 @@ start:
 
     mov al, [BOOT_DRIVE_OFF]
     mov [kernel_boot_drive], al
-    call install_syscall_vector
-    call load_program_table
-    cmp ah, 0
-    jne .prog_table_bad
 
+    call enable_a20
+    call load_boot_gdt
+    call install_syscall_vector
+
+    call console_clear
     call show_boot_logo
     call delay_5s
     call console_clear
 
+    call load_program_table
+    cmp ah, 0
+    jne .prog_table_bad
+
     ; Use kernel as backend and start userspace shell directly.
     call launch_shell
     jmp .shell_loop
-
-    mov si, welcome_msg    ; move boot message to source
-    call console_puts   ; calls print string (prints SI)
-
-        jmp .shell_loop
 
 
 .boot_info_bad:
@@ -822,7 +813,9 @@ run_named_program:
     mov ch, 0
     mov cl, [di + 8]
     mov dh, 0
+    push di
     call disk_read_chs
+    pop di
     jc .load_fail
 
     mov bx, [di + 10]
@@ -914,7 +907,7 @@ logo_line_15:
     db "                         ######                         ", 0
 
 welcome_msg:
-    db "Welcome to CircleOS v0.1.15!", 13, 10, 0
+    db "Welcome to CircleOS v0.1.21!", 13, 10, 0
 
 help_msg:
     db "Available kernel commands:", 13, 10

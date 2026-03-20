@@ -20,8 +20,8 @@ BOOT_KSECT_OFF equ BOOT_INFO_ADDR + 4
 ; OS Versions for debugging
 %assign VER_MAJOR 0 
 %assign VER_MINOR 1
-%assign VER_PATCH 15
-%assign VER_BOOTLOADER 15
+%assign VER_PATCH 21
+%assign VER_BOOTLOADER 21
 
 
 ;   convert the version numbers to strings

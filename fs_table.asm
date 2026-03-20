@@ -18,14 +18,6 @@
 [BITS 16]
 [ORG 0]
 
-%ifndef DEMO_SECTOR
-DEMO_SECTOR equ 18
-%endif
-
-%ifndef DEMO_SECTORS
-DEMO_SECTORS equ 1
-%endif
-
 %ifndef LS_SECTOR
 LS_SECTOR equ 19
 %endif
@@ -92,20 +84,9 @@ WRITE_SECTORS equ 1
 
 magic:
     db 'C', 'F', 'S', '1'
-    db 10                        ; entry_count (programs + text files)
+    db 9                         ; entry_count (programs + text files)
     times 11 db 0                ; reserved header bytes to offset 16
-
-; Entry 0: demo program
-entry_demo:
-    db 'd', 'e', 'm', 'o', 0, 0, 0, 0
-    db DEMO_SECTOR
-    db DEMO_SECTORS
-    dw 0xA000                    ; load_offset
-    dw 0x0000                    ; entry_offset
-    db 1                         ; entry_type = program
-    db 0                         ; reserved
-
-; Entry 1: ls program (list programs)
+; Entry 0: ls program (list programs)
 entry_ls:
     db 'l', 's', 0, 0, 0, 0, 0, 0
     db LS_SECTOR
@@ -115,7 +96,7 @@ entry_ls:
     db 1                         ; entry_type = program
     db 0                         ; reserved
 
-; Entry 2: info program (system info)
+; Entry 1: info program (system info)
 entry_info:
     db 'i', 'n', 'f', 'o', 0, 0, 0, 0
     db INFO_SECTOR
@@ -125,7 +106,7 @@ entry_info:
     db 1                         ; entry_type = program
     db 0                         ; reserved
 
-; Entry 3: stat program (program statistics)
+; Entry 2: stat program (program statistics)
 entry_stat:
     db 's', 't', 'a', 't', 0, 0, 0, 0
     db STAT_SECTOR
@@ -135,7 +116,7 @@ entry_stat:
     db 1                         ; entry_type = program
     db 0                         ; reserved
 
-; Entry 4: greet program (greeting)
+; Entry 3: greet program (greeting)
 entry_greet:
     db 'g', 'r', 'e', 'e', 't', 0, 0, 0
     db GREET_SECTOR
@@ -145,7 +126,7 @@ entry_greet:
     db 1                         ; entry_type = program
     db 0                         ; reserved
 
-; Entry 5: cat program
+; Entry 4: cat program
 entry_cat:
     db 'c', 'a', 't', 0, 0, 0, 0, 0
     db CAT_SECTOR
@@ -155,8 +136,7 @@ entry_cat:
     db 1                         ; entry_type = program
     db 0                         ; reserved
 
-; Entry 6: readme text file
-; Entry 6: todo text file
+; Entry 5: todo text file
 entry_todo:
     db 't', 'o', 'd', 'o', 0, 0, 0, 0
     db TODO_SECTOR
@@ -166,7 +146,7 @@ entry_todo:
     db 2                         ; entry_type = text
     db 0                         ; reserved
 
-; Entry 7: dir alias to ls -v metadata output
+; Entry 6: dir alias to ls -v metadata output
 entry_dir:
     db 'd', 'i', 'r', 0, 0, 0, 0, 0
     db DIR_SECTOR
@@ -176,7 +156,7 @@ entry_dir:
     db 1                         ; entry_type = program
     db 0                         ; reserved
 
-; Entry 8: write program
+; Entry 7: write program
 entry_write:
     db 'w', 'r', 'i', 't', 'e', 0, 0, 0
     db WRITE_SECTOR
@@ -186,7 +166,7 @@ entry_write:
     db 1                         ; entry_type = program
     db 0                         ; reserved
 
-; Entry 9: lsv alias to ls -v metadata output
+; Entry 8: lsv alias to ls -v metadata output
 entry_lsv:
     db 'l', 's', 'v', 0, 0, 0, 0, 0
     db DIR_SECTOR

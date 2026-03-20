@@ -118,6 +118,12 @@ start:
     cmp al, 1
     je .cmd_run_usage
 
+    ; Fallback: try to run command as a program name directly (e.g. "ls")
+    mov si, cmd_buf
+    call sys_run
+    cmp ah, 0
+    je .shell_loop
+
     ; unknown
     mov si, msg_unknown
     call sys_puts
@@ -269,7 +275,7 @@ str_startswith:
     ret
 
 shell_banner:
-    db "Circle Shell interactive mode v0.1.15", 0
+    db "Circle Shell interactive mode v0.1.21", 0
 
 shell_prompt:
     db "csh> ", 0
