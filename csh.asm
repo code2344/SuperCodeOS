@@ -1,5 +1,6 @@
 ; csh.asm
 ; CIRCLE SHELL
+; CEX1 VERSION 1
 
 [BITS 16]
 [ORG 0x9000]
@@ -284,7 +285,7 @@ str_startswith:
     ret
 
 shell_banner:
-    db "Circle Shell interactive mode v0.1.21", 0
+    db "Circle Shell interactive mode v0.1.22", 0
 
 shell_prompt:
     db "csh> ", 0

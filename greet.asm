@@ -1,5 +1,6 @@
 ; greet.asm - Simple greeting program
 ; Displays a welcome message
+; CEX1 VERSION 1
 
 bits 16
 org 0xA000

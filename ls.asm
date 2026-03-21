@@ -1,5 +1,6 @@
 ; ls.asm - Verbose directory listing
 ; Shows name, sector, count, load address, and type for each table entry
+; CEX1 VERSION 1
 
 bits 16
 org 0xA000

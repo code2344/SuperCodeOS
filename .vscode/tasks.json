@@ -6,7 +6,7 @@
         {
             "label": "build",
             "type": "shell",
-            "command": "/Users/ruben_sutton29/Documents/SuperCodeOS/SuperCodeOS/build.sh",
+            "command": "/Users/ruben_sutton29/Documents/CircleOS/CircleOS/build.sh",
             "problemMatcher": [],
             "group": {
                 "kind": "build",

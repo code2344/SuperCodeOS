@@ -82,9 +82,17 @@ WRITE_SECTOR equ 26
 WRITE_SECTORS equ 1
 %endif
 
+%ifndef IMG_SECTOR
+IMG_SECTOR equ 27
+%endif
+
+%ifndef IMG_SECTORS
+IMG_SECTORS equ 1
+%endif
+
 magic:
     db 'C', 'F', 'S', '1'
-    db 9                         ; entry_count (programs + text files)
+    db 10                        ; entry_count (programs + text files)
     times 11 db 0                ; reserved header bytes to offset 16
 ; Entry 0: ls program (list programs)
 entry_ls:
@@ -171,6 +179,16 @@ entry_lsv:
     db 'l', 's', 'v', 0, 0, 0, 0, 0
     db DIR_SECTOR
     db DIR_SECTORS
+    dw 0xA000                    ; load_offset
+    dw 0x0000                    ; entry_offset
+    db 1                         ; entry_type = program
+    db 0                         ; reserved
+
+; Entry 9: img program (image viewer)
+entry_img:
+    db 'i', 'm', 'g', 0, 0, 0, 0, 0
+    db IMG_SECTOR
+    db IMG_SECTORS
     dw 0xA000                    ; load_offset
     dw 0x0000                    ; entry_offset
     db 1                         ; entry_type = program

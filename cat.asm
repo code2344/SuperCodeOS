@@ -1,4 +1,5 @@
 ; cat.asm - Read and print text files from CFS1 table
+; CEX1 VERSION 1
 
 [BITS 16]
 [ORG 0xA000]

@@ -1,5 +1,6 @@
 ; stat.asm - Display program statistics
 ; Shows program count and memory layout
+; CEX1 VERSION 1
 
 bits 16
 org 0xA000

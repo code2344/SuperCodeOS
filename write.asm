@@ -1,4 +1,5 @@
 ; write.asm - Append one line to a fixed text-file region (todo)
+; CEX1 VERSION 1
 
 [BITS 16]
 [ORG 0xA000]

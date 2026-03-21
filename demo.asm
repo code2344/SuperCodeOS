@@ -1,5 +1,6 @@
 ; demo.asm
 ; Tiny runnable program loaded by kernel SYS_RUN
+; CEX1 VERSION 1
 
 [BITS 16]
 [ORG 0xA000]

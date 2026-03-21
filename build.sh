@@ -107,10 +107,25 @@ WRITE_SECTORS=$(( (WRITE_SIZE + 511) / 512 ))
 WRITE_SECTOR=$((CAT_SECTOR + CAT_SECTORS))
 echo "write.asm assembled (size: $WRITE_SIZE bytes = $WRITE_SECTORS sectors, sector $WRITE_SECTOR)"
 
+nasm img.asm -o build/img.bin
+if [ $? -ne 0 ]; then
+    echo "Error assembling img.asm"
+    exit 1
+fi
+IMG_SIZE=$(stat -f%z "build/img.bin")
+if [ "$IMG_SIZE" -le 0 ]; then
+    echo "Error: img.asm produced empty binary"
+    exit 1
+fi
+IMG_SECTORS=$(( (IMG_SIZE + 511) / 512 ))
+IMG_SECTOR=$((WRITE_SECTOR + WRITE_SECTORS))
+echo "img.asm assembled (size: $IMG_SIZE bytes = $IMG_SECTORS sectors, sector $IMG_SECTOR)"
+
 WRITE_END=$((WRITE_SECTOR + WRITE_SECTORS - 1))
+IMG_END=$((IMG_SECTOR + IMG_SECTORS - 1))
 TODO_END=$((TODO_SECTOR + TODO_SECTORS - 1))
 
-if [ "$WRITE_END" -ge "$FS_TABLE_SECTOR" ]; then
+if [ "$IMG_END" -ge "$FS_TABLE_SECTOR" ]; then
     echo "Layout error: executable region overlaps filesystem table"
     exit 1
 fi
@@ -137,6 +152,7 @@ nasm -DFS_TABLE_SECTOR=$FS_TABLE_SECTOR \
     -DTODO_SECTOR=$TODO_SECTOR -DTODO_SECTORS=$TODO_SECTORS \
     -DDIR_SECTOR=$DIR_SECTOR -DDIR_SECTORS=$DIR_SECTORS \
     -DWRITE_SECTOR=$WRITE_SECTOR -DWRITE_SECTORS=$WRITE_SECTORS \
+    -DIMG_SECTOR=$IMG_SECTOR -DIMG_SECTORS=$IMG_SECTORS \
     fs_table.asm -o build/fs_table.bin
 if [ $? -ne 0 ]; then
     echo "Error assembling fs_table.asm"
@@ -184,6 +200,7 @@ dd if=build/greet.bin of=build/circleos.img bs=512 seek=$((GREET_SECTOR - 1)) co
 dd if=build/cat.bin of=build/circleos.img bs=512 seek=$((CAT_SECTOR - 1)) count=$CAT_SECTORS conv=notrunc 2>/dev/null
 dd if=build/todo.bin of=build/circleos.img bs=512 seek=$((TODO_SECTOR - 1)) count=$TODO_SECTORS conv=notrunc 2>/dev/null
 dd if=build/write.bin of=build/circleos.img bs=512 seek=$((WRITE_SECTOR - 1)) count=$WRITE_SECTORS conv=notrunc 2>/dev/null
+dd if=build/img.bin of=build/circleos.img bs=512 seek=$((IMG_SECTOR - 1)) count=$IMG_SECTORS conv=notrunc 2>/dev/null
 
 echo "CircleOS built successfully! Disk image created at build/circleos.img"
 echo ""
@@ -198,6 +215,7 @@ echo "  $GREET_SECTOR-$((GREET_SECTOR + GREET_SECTORS - 1)): greet program"
 echo "  $CAT_SECTOR-$((CAT_SECTOR + CAT_SECTORS - 1)): cat program"
 echo "  $TODO_SECTOR-$((TODO_SECTOR + TODO_SECTORS - 1)): todo text file"
 echo "  $WRITE_SECTOR-$((WRITE_SECTOR + WRITE_SECTORS - 1)): write program"
+echo "  $IMG_SECTOR-$((IMG_SECTOR + IMG_SECTORS - 1)): img program"
 echo "  $DIR_SECTOR-$((DIR_SECTOR + DIR_SECTORS - 1)): dir/lsv alias (ls binary)"
 echo "  $FS_TABLE_SECTOR: filesystem table"
 echo "  $DATA_START_SECTOR+: reserved writable data area"

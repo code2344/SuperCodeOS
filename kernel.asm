@@ -907,7 +907,7 @@ logo_line_15:
     db "                         ######                         ", 0
 
 welcome_msg:
-    db "Welcome to CircleOS v0.1.21!", 13, 10, 0
+    db "Welcome to CircleOS v0.1.22!", 13, 10, 0
 
 help_msg:
     db "Available kernel commands:", 13, 10
