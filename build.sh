@@ -1,11 +1,18 @@
 #!/bin/bash
-# build script
+# build script for CircleOS v0.1.22
 
 FS_TABLE_SECTOR=20
 DEBUG=1
-DATA_START_SECTOR=24
-IMAGE_PAL_FILE="meme.pal"
-IMAGE_IMG_FILE="meme.img"
+DATA_START_SECTOR=64
+INODE_META_START_SECTOR=200
+# Dynamic image input selection:
+#   IMAGE_BASE=foo ./build.sh
+#   IMAGE_PAL_FILE=foo.pal IMAGE_IMG_FILE=foo.img ./build.sh
+IMAGE_BASE="${IMAGE_BASE:-meme}"
+IMAGE_PAL_FILE="${IMAGE_PAL_FILE:-${IMAGE_BASE}.pal}"
+IMAGE_IMG_FILE="${IMAGE_IMG_FILE:-${IMAGE_BASE}.img}"
+IMAGE_SRC_FILE="${IMAGE_SRC_FILE:-${IMAGE_BASE}.png}"
+AUTO_CONVERT_IMAGE="${AUTO_CONVERT_IMAGE:-1}"
 
 echo "Building CircleOS..."
 
@@ -99,6 +106,21 @@ TODO_SECTORS=$(( (TODO_SIZE + 511) / 512 ))
 TODO_SECTOR=$DATA_START_SECTOR
 echo "todo.txt packaged (size: $TODO_SIZE bytes = $TODO_SECTORS sectors, sector $TODO_SECTOR)"
 
+# Auto-generate palette/image assets when source image + converter are present.
+if [ "$AUTO_CONVERT_IMAGE" = "1" ] && [ -f "make_image_assets.py" ] && [ -f "$IMAGE_SRC_FILE" ]; then
+    if python3 -c "import PIL" >/dev/null 2>&1; then
+        echo "auto-converting $IMAGE_SRC_FILE -> $IMAGE_PAL_FILE / $IMAGE_IMG_FILE"
+        python3 make_image_assets.py "$IMAGE_SRC_FILE" "$IMAGE_PAL_FILE" "$IMAGE_IMG_FILE"
+        if [ $? -ne 0 ]; then
+            echo "Error: make_image_assets.py failed"
+            exit 1
+        fi
+    else
+        echo "warning: Pillow (PIL) not installed; skipping auto-convert"
+        echo "         using existing $IMAGE_PAL_FILE / $IMAGE_IMG_FILE if present"
+    fi
+fi
+
 if [ ! -f "$IMAGE_PAL_FILE" ]; then
     echo "Error: missing palette file '$IMAGE_PAL_FILE'"
     exit 1
@@ -159,18 +181,21 @@ IMG_SECTORS=$(( (IMG_SIZE + 511) / 512 ))
 IMG_SECTOR=$((WRITE_SECTOR + WRITE_SECTORS))
 echo "img.asm assembled (size: $IMG_SIZE bytes = $IMG_SECTORS sectors, sector $IMG_SECTOR)"
 
+# Place filesystem table right after executable region.
+FS_TABLE_SECTOR_RUNTIME=$((IMG_SECTOR + IMG_SECTORS))
+
 WRITE_END=$((WRITE_SECTOR + WRITE_SECTORS - 1))
 IMG_END=$((IMG_SECTOR + IMG_SECTORS - 1))
 TODO_END=$((TODO_SECTOR + TODO_SECTORS - 1))
 SPLASH_PAL_END=$((SPLASH_PAL_SECTOR + SPLASH_PAL_SECTORS - 1))
 SPLASH_IMG_END=$((SPLASH_IMG_SECTOR + SPLASH_IMG_SECTORS - 1))
 
-if [ "$IMG_END" -ge "$FS_TABLE_SECTOR" ]; then
+if [ "$IMG_END" -ge "$FS_TABLE_SECTOR_RUNTIME" ]; then
     echo "Layout error: executable region overlaps filesystem table"
     exit 1
 fi
 
-if [ "$FS_TABLE_SECTOR" -ge "$DATA_START_SECTOR" ]; then
+if [ "$FS_TABLE_SECTOR_RUNTIME" -ge "$DATA_START_SECTOR" ]; then
     echo "Layout error: filesystem table must be before reserved data area"
     exit 1
 fi
@@ -185,10 +210,15 @@ if [ "$SPLASH_PAL_SECTOR" -lt "$DATA_START_SECTOR" ] || [ "$SPLASH_IMG_SECTOR" -
     exit 1
 fi
 
+if [ "$SPLASH_IMG_END" -ge "$INODE_META_START_SECTOR" ]; then
+    echo "Layout error: reserved data overlaps inode filesystem metadata"
+    exit 1
+fi
+
 DIR_SECTOR=$LS_SECTOR
 DIR_SECTORS=$LS_SECTORS
 
-nasm -DFS_TABLE_SECTOR=$FS_TABLE_SECTOR \
+nasm -DFS_TABLE_SECTOR=$FS_TABLE_SECTOR_RUNTIME \
     -DLS_SECTOR=$LS_SECTOR -DLS_SECTORS=$LS_SECTORS \
     -DINFO_SECTOR=$INFO_SECTOR -DINFO_SECTORS=$INFO_SECTORS \
     -DSTAT_SECTOR=$STAT_SECTOR -DSTAT_SECTORS=$STAT_SECTORS \
@@ -206,7 +236,7 @@ fi
 echo "fs_table.asm assembled successfully"
 
 # Step 6: Reassemble kernel with correct defines
-nasm -DDEBUG=$DEBUG -DFS_TABLE_SECTOR=$FS_TABLE_SECTOR -DSHELL_SECTORS=$SHELL_SECTORS kernel.asm -o build/kernel.bin
+nasm -DDEBUG=$DEBUG -DFS_TABLE_SECTOR=$FS_TABLE_SECTOR_RUNTIME -DSHELL_SECTORS=$SHELL_SECTORS kernel.asm -o build/kernel.bin
 if [ $? -ne 0 ]; then
     echo "Error assembling kernel.asm"
     exit 1
@@ -234,8 +264,8 @@ dd if=build/kernel.bin of=build/circleos.img bs=512 seek=1 count=$KERNEL_SECTORS
 echo "writing shell to disk image (sectors $((2 + KERNEL_SECTORS))-$((1 + KERNEL_SECTORS + SHELL_SECTORS)))"
 dd if=build/csh.bin of=build/circleos.img bs=512 seek=$((1 + KERNEL_SECTORS)) count=$SHELL_SECTORS conv=notrunc 2>/dev/null
 
-echo "writing filesystem table to disk image (sector $FS_TABLE_SECTOR)"
-dd if=build/fs_table.bin of=build/circleos.img bs=512 seek=$((FS_TABLE_SECTOR - 1)) count=1 conv=notrunc 2>/dev/null
+echo "writing filesystem table to disk image (sector $FS_TABLE_SECTOR_RUNTIME)"
+dd if=build/fs_table.bin of=build/circleos.img bs=512 seek=$((FS_TABLE_SECTOR_RUNTIME - 1)) count=1 conv=notrunc 2>/dev/null
 
 echo "writing programs to disk"
 dd if=build/ls.bin of=build/circleos.img bs=512 seek=$((LS_SECTOR - 1)) count=$LS_SECTORS conv=notrunc 2>/dev/null
@@ -266,5 +296,5 @@ echo "  $SPLASH_IMG_SECTOR-$SPLASH_IMG_END: image pixel data ($IMAGE_IMG_FILE)"
 echo "  $WRITE_SECTOR-$((WRITE_SECTOR + WRITE_SECTORS - 1)): write program"
 echo "  $IMG_SECTOR-$((IMG_SECTOR + IMG_SECTORS - 1)): img program"
 echo "  $DIR_SECTOR-$((DIR_SECTOR + DIR_SECTORS - 1)): dir/lsv alias (ls binary)"
-echo "  $FS_TABLE_SECTOR: filesystem table"
+echo "  $FS_TABLE_SECTOR_RUNTIME: filesystem table"
 echo "  $DATA_START_SECTOR+: reserved writable data area"

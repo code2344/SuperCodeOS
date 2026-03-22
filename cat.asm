@@ -1,5 +1,5 @@
-; cat.asm - Read and print text files from CFS1 table
-; CEX1 VERSION 1
+; cat.asm - Read and print text files from writable inode filesystem
+; CEX1 VERSION 2
 
 [BITS 16]
 [ORG 0xA000]
