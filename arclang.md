@@ -44,7 +44,17 @@ Each section must be terminated and marked properly for the program to be valid.
 
 # 4. Header specification
 ## 4.1 Header Syntax
+Each header line is made up of a common structure:
+```arc
+<KEY : VALUE>
+```
+The whitespace around the : is mandatory, however can be an arbitrary amount. (```arc <KEY : VALUE>``` and ```arc <KEY       :       VALUE>``` are both valid)
+The header must begin with
+```arc
+<ARC vX.Y.Z>
+```
+to both validate that it is an ARC program and confirm that the version features are compatible.
 ## 4.2 Core header fields
-## 4.3 security fields
+## 4.3 Security and Signing fields
 ## 4.1 Dependency declaration and validation
 ## 4.5 Optional behaviour flags
