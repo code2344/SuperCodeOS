@@ -1,85 +1,78 @@
-; write.asm - Append one line to a fixed text-file region (todo)
-; CEX1 VERSION 1
+; write.asm - Append one line to a writable inode filesystem file
+; CEX1 VERSION 2
 
-[BITS 16]
-[ORG 0xA000]
+[BITS 16]           ; 16-bit real mode
+[ORG 0xA000]        ; user program load address
 
 SYSCALL_INT equ 0x80
 SYS_PUTC equ 0x01
 SYS_PUTS equ 0x02
 SYS_NEWLINE equ 0x03
 SYS_GETC equ 0x04
-SYS_READ_RAW equ 0x07
-SYS_WRITE_RAW equ 0x08
+SYS_FS_READ equ 0x09
+SYS_FS_WRITE equ 0x0A
 CTRL_C equ 0x03
-
-%ifndef LOG_SECTOR
-LOG_SECTOR equ 15
-%endif
-
-%ifndef LOG_SECTORS
-LOG_SECTORS equ 1
-%endif
-
-LOG_BUF_SIZE equ 512
+FILE_BUF_SIZE equ 1024
 
 start:
-    mov ax, 0
+    xor ax, ax
     mov ds, ax
     mov es, ax
 
+    ; Display title and prompt for filename
     mov si, msg_title
     call sys_puts
 
-    ; Load existing log text from disk
-    mov bx, log_buf
-    mov al, LOG_SECTORS
-    mov ch, 0
-    mov cl, LOG_SECTOR
-    mov dh, 0
-    mov ah, SYS_READ_RAW
-    int SYSCALL_INT
-    cmp ah, 0
-    jne .read_fail
-
-    ; Find end (first 0 byte) in log buffer
-    mov bx, log_buf
-    xor cx, cx
-.find_end:
-    cmp cx, LOG_BUF_SIZE
-    jae .full
-    cmp byte [bx], 0
-    je .have_end
-    inc bx
-    inc cx
-    jmp .find_end
-
-.have_end:
-    mov [append_ptr], bx
-    mov ax, bx
-    sub ax, log_buf
-    mov [append_ofs], ax
-
-    mov si, msg_prompt
+    mov si, msg_file_prompt
     call sys_puts
-    call read_line
+    call read_name_line         ; read target filename from stdin
 
-    ; Ctrl+C from prompt aborts write and returns to csh.
-    cmp byte [line_buf], CTRL_C
+    cmp byte [name_buf], CTRL_C ; user cancelled?
     je .cancelled
+    cmp byte [name_buf], 0      ; no filename entered?
+    je .usage
 
-    cmp byte [line_buf], 0
+    ; Try to read existing file; not found (AH=1) means start empty
+    mov si, name_buf
+    mov bx, file_buf
+    mov ah, SYS_FS_READ
+    int SYSCALL_INT
+
+    cmp ah, 0       ; file exists and was read?
+    je .have_existing
+    cmp ah, 1       ; file not found (ok, start empty)?
+    je .new_file
+    jmp .read_fail  ; other error
+
+.have_existing:
+    mov [append_ofs], cx  ; CX has bytes read from file
+    cmp word [append_ofs], FILE_BUF_SIZE - 3
+    jae .full            ; no room to append
+    jmp .prompt_text
+
+.new_file:
+    mov word [append_ofs], 0  ; start with empty file
+
+.prompt_text:
+    mov si, msg_text_prompt
+    call sys_puts
+    call read_text_line  ; read new line from stdin
+
+    cmp byte [line_buf], CTRL_C  ; user cancelled?
+    je .cancelled
+    cmp byte [line_buf], 0       ; empty line?
     je .empty
 
-    ; Append line to log buffer
-    mov di, [append_ptr]
+    ; Build output: existing file + new line + CRLF
+    mov di, file_buf
+    add di, [append_ofs] ; position after existing content
     mov si, line_buf
 .append_loop:
     mov al, [si]
-    cmp al, 0
+    cmp al, 0            ; reached end of new line?
     je .append_crlf
 
-    cmp di, log_buf + LOG_BUF_SIZE - 3
+    cmp di, file_buf + FILE_BUF_SIZE - 3  ; room for char + CRLF?
     jae .full
 
     mov [di], al
@@ -88,61 +81,25 @@ start:
     jmp .append_loop
 
 .append_crlf:
-    cmp di, log_buf + LOG_BUF_SIZE - 3
+    cmp di, file_buf + FILE_BUF_SIZE - 3
     jae .full
-    mov byte [di], 13
+    mov byte [di], 13   ; CR
     inc di
-    mov byte [di], 10
+    mov byte [di], 10   ; LF
     inc di
-    mov byte [di], 0
+    mov byte [di], 0    ; null-terminate buffer
     mov ax, di
-    sub ax, log_buf
-    mov [append_end_ofs], ax
+    sub ax, file_buf
+    mov [append_end_ofs], ax  ; total bytes to write
 
-    ; Write whole sector back
-    mov bx, log_buf
-    mov al, LOG_SECTORS
-    mov ch, 0
-    mov cl, LOG_SECTOR
-    mov dh, 0
-    mov ah, SYS_WRITE_RAW
+    ; Write file back to filesystem
+    mov si, name_buf
+    mov bx, file_buf
+    mov cx, [append_end_ofs]
+    mov ah, SYS_FS_WRITE
     int SYSCALL_INT
-    cmp ah, 0
+    cmp ah, 0           ; write successful?
     jne .write_fail
-
-    ; Read back and verify appended bytes.
-    mov bx, log_buf
-    mov al, LOG_SECTORS
-    mov ch, 0
-    mov cl, LOG_SECTOR
-    mov dh, 0
-    mov ah, SYS_READ_RAW
-    int SYSCALL_INT
-    cmp ah, 0
-    jne .verify_fail
-
-    mov bx, log_buf
-    add bx, [append_ofs]
-    mov si, line_buf
-.verify_line:
-    mov al, [si]
-    cmp al, 0
-    je .verify_crlf
-    cmp al, [bx]
-    jne .verify_fail
-    inc si
-    inc bx
-    jmp .verify_line
-
-.verify_crlf:
-    cmp byte [bx], 13
-    jne .verify_fail
-    inc bx
-    cmp byte [bx], 10
-    jne .verify_fail
-    inc bx
-    cmp byte [bx], 0
-    jne .verify_fail
 
     mov si, msg_ok
     call sys_puts
@@ -150,7 +107,7 @@ start:
     ret
 
 .cancelled:
-    ret
+    ret                 ; exit without saving
 
 .empty:
     mov si, msg_empty
@@ -160,6 +117,12 @@ start:
 
 .full:
     mov si, msg_full
+    call sys_puts
+    call sys_newline
+    ret
+
+.usage:
+    mov si, msg_usage
     call sys_puts
     call sys_newline
     ret
@@ -176,30 +139,74 @@ start:
     call sys_newline
     ret
 
-.verify_fail:
-    mov si, msg_verify_fail
-    call sys_puts
+read_name_line:         ; read filename with backspace/ctrl-c support
+    xor cx, cx
+    mov bx, name_buf
+.read_loop:
+    call sys_getc
+
+    cmp al, CTRL_C      ; cancel entry
+    je .cancel
+
+    cmp al, 13          ; enter = done
+    je .done
+
+    cmp al, 8           ; backspace
+    je .backspace
+
+    call sys_putc       ; echo character
+    cmp cx, 31          ; prevent overflow
+    jae .read_loop
+
+    mov si, cx
+    mov [bx + si], al
+    inc cx
+    jmp .read_loop
+
+.backspace:
+    cmp cx, 0
+    je .read_loop
+
+    mov al, 8
+    call sys_putc       ; backspace
+    mov al, ' '
+    call sys_putc       ; erase
+    mov al, 8
+    call sys_putc       ; move cursor back
+
+    dec cx
+    mov si, cx
+    mov byte [bx + si], 0
+    jmp .read_loop
+
+.cancel:
+    mov byte [name_buf], CTRL_C
     call sys_newline
     ret
 
-read_line:
+.done:
+    mov si, cx
+    mov byte [bx + si], 0  ; null-terminate input
+    call sys_newline
+    ret
+
+read_text_line:         ; read text line with backspace/ctrl-c support
     xor cx, cx
     mov bx, line_buf
 .read_loop:
     call sys_getc
 
-    ; Ctrl+C cancels line entry.
-    cmp al, CTRL_C
+    cmp al, CTRL_C      ; cancel entry
     je .cancel
 
-    cmp al, 13
+    cmp al, 13          ; enter = done
     je .done
 
-    cmp al, 8
+    cmp al, 8           ; backspace
     je .backspace
 
-    call sys_putc
-    cmp cx, 79
+    call sys_putc       ; echo character
+    cmp cx, 79          ; prevent overflow
     jae .read_loop
 
     mov si, cx
@@ -230,56 +237,59 @@ read_line:
 
 .done:
     mov si, cx
-    mov byte [bx + si], 0
+    mov byte [bx + si], 0  ; null-terminate input
     call sys_newline
     ret
 
-sys_putc:
+sys_putc:               ; syscall: put character
     mov ah, SYS_PUTC
     int SYSCALL_INT
     ret
 
-sys_puts:
+sys_puts:               ; syscall: put string
     mov ah, SYS_PUTS
     int SYSCALL_INT
     ret
 
-sys_newline:
+sys_newline:            ; syscall: newline
     mov ah, SYS_NEWLINE
     int SYSCALL_INT
     ret
 
-sys_getc:
+sys_getc:               ; syscall: get character
     mov ah, SYS_GETC
     int SYSCALL_INT
     ret
 
 msg_title:
-    db "write - append one line to todo", 13, 10, 0
-msg_prompt:
+    db "write - append one line to file", 13, 10, 0
+msg_file_prompt:
+    db "file> ", 0
+msg_text_prompt:
     db "text> ", 0
+msg_usage:
+    db "usage: enter file name then text", 0
 msg_ok:
     db "append ok", 0
 msg_empty:
     db "nothing written", 0
 msg_full:
-    db "todo file full", 0
+    db "file full", 0
 msg_read_fail:
     db "read failed", 0
 msg_write_fail:
     db "write failed", 0
-msg_verify_fail:
-    db "write verify failed", 0
 
-append_ptr:
-    dw 0
 append_ofs:
-    dw 0
+    dw 0                   ; offset where to append new text
 append_end_ofs:
-    dw 0
+    dw 0                   ; final size of file after append
+
+name_buf:
+    times 32 db 0          ; filename input buffer
 
 line_buf:
-    times 80 db 0
+    times 80 db 0          ; text line input buffer
 
-log_buf:
-    times LOG_BUF_SIZE db 0
+file_buf:
+    times FILE_BUF_SIZE db 0  ; file content buffer
