@@ -55,6 +55,13 @@ The header must begin with
 ```
 to both validate that it is an ARC program and confirm that the version features are compatible.
 ## 4.2 Core header fields
+|Value|Key type|Optional?|Description|
+|-----|-----|-----|-----|
+|TITLE|Plaintext|No|Human-readable title used as window title|
+|DESC|Plaintext|Yes|Description, printed in help/manual|
+|AUTHOR|Plaintext|No|Primary author, can be an organisation author|
+|LICENSE|Plaintext|Yes|Licence that the program is released under, if not specified the code is assumed to be under CC0|
+|CATEGORY|
 ## 4.3 Security and Signing fields
 ## 4.1 Dependency declaration and validation
 ## 4.5 Optional behaviour flags
