@@ -26,6 +26,7 @@ SYS_FS_LIST equ 0x0B
 SYS_FS_DELETE equ 0x0C
 SYS_FS_MKDIR equ 0x0D
 SYS_FS_CHDIR equ 0x0E
+SYS_REBOOT equ 0x0F
 
 %ifndef DEBUG
 %define DEBUG 0
@@ -393,7 +394,7 @@ syscall_handler:
     push ds                 ; save DS (segment register)
     push es                 ; save ES (segment register)
 
-    ; ================== DISPATCH TABLE (14 SYSCALLS) ==================
+    ; ================== DISPATCH TABLE (15 SYSCALLS) ==================
     ; Each syscall code maps to a handler function
     
     cmp ah, SYS_PUTC        ; 0x01: output single character
@@ -437,6 +438,9 @@ syscall_handler:
 
     cmp ah, SYS_FS_CHDIR    ; 0x0E: change current working directory
     je .sys_fs_chdir
+
+    cmp ah, SYS_REBOOT      ; 0x0F: reboot system
+    je .sys_reboot
 
     ; Unknown or unsupported syscall code
     mov ah, 0xFF            ; return error: unknown syscall
@@ -535,6 +539,14 @@ syscall_handler:
     ; Output: AH = status (0=success, 1=not found, 2=error)
     call fs_chdir_by_path
     jmp .done
+
+.sys_reboot:
+    ; Reboot machine via BIOS bootstrap loader.
+    ; If BIOS returns unexpectedly, halt safely.
+    cli
+    int 0x19
+    hlt
+    jmp .sys_reboot
 
 .done:
     ; Restore all registers and return to caller

@@ -24,6 +24,7 @@ SYS_FS_READ equ 0x09
 SYS_FS_DELETE equ 0x0C
 SYS_FS_MKDIR equ 0x0D
 SYS_FS_CHDIR equ 0x0E
+SYS_REBOOT equ 0x0F
 CTRL_C equ 0x03
 ARC_BUF_SIZE equ 1024
 
@@ -129,6 +130,13 @@ start:
     call str_eq
     cmp al, 1
     je .cmd_exit            ; jump to exit handler
+
+    ; "reboot" - reboot machine
+    mov si, cmd_buf
+    mov di, cmd_reboot
+    call str_eq
+    cmp al, 1
+    je .cmd_reboot
 
     ; ================== PROGRAM LAUNCHING ==================
     ; "run" command family: runs programs from the program table
@@ -277,6 +285,13 @@ start:
     call sys_puts           ; print "returning to kernel"
     call sys_newline
     ret                     ; return to kernel caller (end shell)
+
+.cmd_reboot:
+    mov si, msg_reboot
+    call sys_puts
+    call sys_newline
+    call sys_reboot
+    jmp .shell_loop
 
 .cmd_run:
     mov si, cmd_buf         ; SI -> command buffer
@@ -670,6 +685,14 @@ sys_fs_chdir:
     int SYSCALL_INT         ; INT 0x80: kernel changes working directory
     ret
 
+; sys_reboot - Reboot machine via kernel reboot syscall
+; Input: none
+; Output: none (system restarts)
+sys_reboot:
+    mov ah, SYS_REBOOT      ; AH = 0x0F: syscall code for reboot
+    int SYSCALL_INT         ; INT 0x80: kernel reboots the machine
+    ret
+
 ; ================== STRING COMPARISON UTILITIES ==================
 ; Used by command dispatcher to match user input against known commands
 
@@ -733,13 +756,16 @@ shell_prompt:
     db "csh> ", 0          ; command prompt shown before each input
 
 msg_help:
-    db "commands: help, clear, echo <text>, run <name>, mkdir <p>, rm <p>, cd <p>, arc <f>, exit", 0
+    db "commands: help, clear, echo <text>, run <name>, mkdir <p>, rm <p>, cd <p>, arc <f>, reboot, exit", 0
 
 msg_unknown:
     db "unknown command", 0  ; shown when user enters unrecognized command
 
 msg_exit:
     db "returning to kernel", 0  ; goodbye message
+
+msg_reboot:
+    db "rebooting...", 0
 
 msg_run_usage:
     db "usage: run <name>", 0
@@ -848,6 +874,9 @@ cmd_arc_prefix:
 
 cmd_exit:
     db "exit", 0            ; exact match for exit command
+
+cmd_reboot:
+    db "reboot", 0          ; exact match for reboot command
 
 ; ================== WORKING BUFFERS ==================
 
