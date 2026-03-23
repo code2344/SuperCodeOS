@@ -2,26 +2,25 @@
 ; Shows program count and memory layout
 ; CEX1 VERSION 1
 
-bits 16
-org 0xA000
+bits 16             ; 16-bit real mode
+org 0xA000          ; user program load address
 
 SYSCALL_INT equ 0x80
 SYS_PUTC equ 0x01
 SYS_PUTS equ 0x02
 
 start:
-    mov ax, cs
-    mov ds, ax
-    mov es, ax
+    mov ax, cs         ; load code segment to access message data in CS
+    mov ds, ax         ; point DS to CS
+    mov es, ax         ; point ES to CS
 
     mov si, msg_title
     call sys_puts
 
-    ; Get program table info
-    mov di, 0x0600
-    
-    mov al, [di + 4]
-    mov [prog_count], al
+    ; Read program count from kernel program table at 0x0600
+    mov di, 0x0600     ; kernel stores program table here
+    mov al, [di + 4]   ; program count is at offset +4
+    mov [prog_count], al ; cache it locally
 
     mov si, msg_count
     call sys_puts
@@ -32,24 +31,24 @@ start:
     mov si, msg_memory_layout
     call sys_puts
 
-    ret
+    ret                 ; return to kernel
 
-print_hex8:
+print_hex8:             ; print AL as two hex digits
     push ax
-    shr al, 4
+    shr al, 4           ; shift upper nibble to lower position
     call print_hex_digit
     pop ax
     call print_hex_digit
     ret
 
-print_hex_digit:
-    and al, 0x0F
-    cmp al, 0x0A
-    jl .is_digit
-    add al, 'A' - 0x0A
+print_hex_digit:        ; print low nibble of AL as hex
+    and al, 0x0F        ; isolate low nibble
+    cmp al, 0x0A        ; check if 0-9 or A-F
+    jl .is_digit        ; branch if 0-9
+    add al, 'A' - 0x0A  ; convert 10-15 to A-F
     jmp .print_it
 .is_digit:
-    add al, '0'
+    add al, '0'         ; convert 0-9 to ASCII
 .print_it:
     mov ah, SYS_PUTC
     int SYSCALL_INT

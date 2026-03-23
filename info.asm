@@ -1,15 +1,15 @@
 ; info.asm - Display system information
 ; Shows boot info and memory layout
 
-bits 16
-org 0xA000
+bits 16             ; 16-bit real mode
+org 0xA000          ; user program load address
 
 SYSCALL_INT equ 0x80
 SYS_PUTC equ 0x01
 SYS_PUTS equ 0x02
 
 start:
-    mov ax, cs
+    mov ax, cs         ; load code segment to access message strings
     mov ds, ax
     mov es, ax
 
@@ -19,32 +19,32 @@ start:
     mov si, msg_signature
     call sys_puts
     
-    ; Read boot info signature from 0x0500
+    ; Bootloader stores info struct at 0x0500; first 2 bytes are signature (CB)
     mov ax, [0x0500]
     call print_hex16
 
     mov si, msg_version
     call sys_puts
     
-    ; Read boot info version
+    ; Boot info version at offset +2
     mov al, [0x0502]
     call print_hex8
 
     mov si, msg_drive
     call sys_puts
     
-    ; Read boot info drive number
+    ; BIOS drive number at offset +3
     mov al, [0x0503]
     call print_hex8
 
     mov si, msg_sectors
     call sys_puts
     
-    ; Read boot info sector count
+    ; Kernel sector count at offset +4
     mov ax, [0x0504]
     call print_hex16
 
-    ; Show user-facing component versions.
+    ; Show component version strings
     mov si, msg_os_version
     call sys_puts
 
@@ -59,30 +59,30 @@ start:
 
     ret
 
-print_hex16:
+print_hex16:            ; print AX as four hex digits
     push ax
-    mov al, ah
+    mov al, ah          ; print high byte first
     call print_hex8
     pop ax
     call print_hex8
     ret
 
-print_hex8:
+print_hex8:             ; print AL as two hex digits
     push ax
-    shr al, 4
+    shr al, 4           ; shift upper nibble to lower position
     call print_hex_digit
     pop ax
     call print_hex_digit
     ret
 
-print_hex_digit:
-    and al, 0x0F
-    cmp al, 0x0A
+print_hex_digit:        ; print low nibble of AL as hex ASCII
+    and al, 0x0F        ; isolate low 4 bits
+    cmp al, 0x0A        ; check if digit (0-9) or letter (A-F)
     jl .is_digit
-    add al, 'A' - 0x0A
+    add al, 'A' - 0x0A  ; convert 10-15 to A-F
     jmp .print_it
 .is_digit:
-    add al, '0'
+    add al, '0'         ; convert 0-9 to ASCII
 .print_it:
     mov ah, SYS_PUTC
     int SYSCALL_INT
