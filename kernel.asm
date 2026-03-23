@@ -385,7 +385,8 @@ install_syscall_vector:
 ; - 0xFF: Unknown syscall
 syscall_handler:
     push bx                 ; preserve working registers (kernel-side save)
-    push cx                 ; save CX for file size returns
+    ; NOTE: do not save CX here: some syscalls return outputs in CX
+    ; (e.g., SYS_FS_READ and SYS_FS_LIST return byte counts).
     push dx                 ; save DX for multi-word results
     push si                 ; save SI (used for addressing)
     push di                 ; save DI (used for addressing)
@@ -545,7 +546,6 @@ syscall_handler:
     pop di                  ; restore DI
     pop si                  ; restore SI
     pop dx                  ; restore DX
-    pop cx                  ; restore CX
     pop bx                  ; restore BX
     iret                    ; return to caller (restores IP, CS, and flags)
 
