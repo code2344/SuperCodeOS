@@ -385,8 +385,7 @@ install_syscall_vector:
 ; - 0xFF: Unknown syscall
 syscall_handler:
     push bx                 ; preserve working registers (kernel-side save)
-    ; NOTE: do not save CX here: some syscalls return outputs in CX
-    ; (e.g., SYS_FS_READ and SYS_FS_LIST return byte counts).
+    push cx                 ; preserve caller CX by default
     push dx                 ; save DX for multi-word results
     push si                 ; save SI (used for addressing)
     push di                 ; save DI (used for addressing)
@@ -500,7 +499,7 @@ syscall_handler:
     ; Input: DS:SI = file path, ES:BX = output buffer
     ; Output: AH = status (0=success, 1=not found, 2=error), CX = bytes read
     call fs_read_file_by_name
-    jmp .done
+    jmp .done_keep_cx
 
 .sys_fs_write:
     ; Write/append to file in InodeFS
@@ -514,7 +513,7 @@ syscall_handler:
     ; Input: CX = which entry to return (0, 1, 2, ...)
     ; Output: AH = status, CX = byte count, ES:BX = entry info
     call fs_list_file_by_ordinal
-    jmp .done
+    jmp .done_keep_cx
 
 .sys_fs_delete:
     ; Delete file or directory from InodeFS
@@ -546,6 +545,20 @@ syscall_handler:
     pop di                  ; restore DI
     pop si                  ; restore SI
     pop dx                  ; restore DX
+    pop cx                  ; restore caller CX (default path)
+    pop bx                  ; restore BX
+    iret                    ; return to caller (restores IP, CS, and flags)
+
+.done_keep_cx:
+    ; Variant epilogue for syscalls that return result in CX.
+    ; Drop saved CX from stack so current CX value is preserved for caller.
+    pop es
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop dx
+    add sp, 2               ; discard saved CX slot
     pop bx                  ; restore BX
     iret                    ; return to caller (restores IP, CS, and flags)
 
