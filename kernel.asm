@@ -1265,6 +1265,10 @@ fs_read_file_by_name:
     cmp byte [fs_inode_ready], 1
     jne .io_fail ; jump if not equal/non-zero
 
+    ; Preserve caller output buffer (ES:BX). Helper calls below use ES/BX too.
+    mov [fs_io_es], es
+    mov [fs_io_bx], bx
+
     call fs_load_inode_table
     jc .io_fail
 
@@ -1283,12 +1287,17 @@ fs_read_file_by_name:
     cmp al, 0
     je .ok ; jump if equal/zero
 
+    push cx                 ; preserve byte count return value
     mov dl, [di + INFS_OFF_START]
     mov cl, INFS_DATA_START_SECTOR
     add cl, dl
     mov ch, 0
     mov dh, 0
+    mov bx, [fs_io_bx]      ; restore destination offset provided by caller
+    mov ax, [fs_io_es]
+    mov es, ax              ; restore destination segment provided by caller
     call disk_read_chs
+    pop cx                  ; restore file size for syscall return
     jc .io_fail
 
 .ok:
@@ -2034,6 +2043,10 @@ fs_start_block:
 fs_write_len:
     dw 0
 fs_write_buf:
+    dw 0
+fs_io_bx:
+    dw 0
+fs_io_es:
     dw 0
 fs_seg_name:
     times INFS_NAME_LEN + 1 db 0
