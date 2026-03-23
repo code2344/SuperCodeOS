@@ -61,7 +61,7 @@ to both validate that it is an ARC program and confirm that the version features
 |DESC|Plaintext|Yes|Description, printed in help/manual|
 |AUTHOR|Plaintext|No|Primary author, can be an organisation author|
 |LICENSE|Plaintext|Yes|Licence that the program is released under, if not specified the code is assumed to be under CC0|
-|CATEGORY|
+|CATEGORY|Plaintext|Yes|Category to be displayed under in the Sphere launcher (coming soon :))
 ## 4.3 Security and Signing fields
 ## 4.1 Dependency declaration and validation
 ## 4.5 Optional behaviour flags

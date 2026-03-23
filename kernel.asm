@@ -1180,6 +1180,10 @@ fs_list_file_by_ordinal:
     cmp byte [fs_inode_ready], 1
     jne .io_fail ; jump if not equal/non-zero
 
+    ; Preserve caller output buffer. Helper calls below clobber ES/BX.
+    mov [fs_io_es], es
+    mov [fs_io_bx], bx
+
     mov [fs_ordinal], al
     mov [fs_name_ptr], si
 
@@ -1192,9 +1196,6 @@ fs_list_file_by_ordinal:
     jne .io_fail ; jump if not equal/non-zero
 
     mov [fs_parent_index], al
-
-    push es
-    push bx
 
     xor bl, bl
 .list_scan:
@@ -1232,8 +1233,9 @@ fs_list_file_by_ordinal:
     jmp .list_scan ; jump unconditionally
 
 .emit:
-    pop bx
-    pop es
+    mov bx, [fs_io_bx]
+    mov ax, [fs_io_es]
+    mov es, ax
 
     push di
     mov cx, INFS_NAME_LEN
@@ -1257,14 +1259,8 @@ fs_list_file_by_ordinal:
     ret
 
 .list_end:
-    pop bx
-    pop es
     mov ah, 1
     ret
-
-.list_io_fail:
-    pop bx
-    pop es
 .io_fail:
     mov ah, 2
     ret
@@ -1373,7 +1369,8 @@ fs_write_file_by_name:
     mov byte [di + INFS_OFF_TYPE], INFS_TYPE_FILE
     mov al, [fs_parent_index]
     mov byte [di + INFS_OFF_PARENT], al
-    call fs_name_copy_leaf_to_inode
+    mov si, [fs_path_ptr]
+    call fs_name_copy_path_tail_to_inode
 
     ; Mark .arc files as script type.
     call fs_leaf_is_arc
@@ -1528,6 +1525,8 @@ fs_mkdir_by_path:
     cmp byte [fs_inode_ready], 1
     jne .io_fail ; jump if not equal/non-zero
 
+    mov [fs_path_ptr], si
+
     call fs_load_inode_table
     jc .io_fail
 
@@ -1554,7 +1553,8 @@ fs_mkdir_by_path:
     mov byte [di + INFS_OFF_COUNT], 0
     mov al, [fs_parent_index]
     mov [di + INFS_OFF_PARENT], al
-    call fs_name_copy_leaf_to_inode
+    mov si, [fs_path_ptr]
+    call fs_name_copy_path_tail_to_inode
 
     call fs_save_inode_table
     jc .io_fail
@@ -1916,6 +1916,70 @@ fs_name_copy_leaf_to_inode:
     jnz .zl ; jump if not equal/non-zero
 .done:
     pop di
+    ret
+
+; fs_name_copy_path_tail_to_inode
+; Input: DS:SI full path, DI inode ptr
+; Copies only final path segment (after last '/') into inode name field.
+fs_name_copy_path_tail_to_inode:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+
+    mov bx, si
+.find_tail:
+    mov al, [si]
+    cmp al, 0
+    je .tail_found
+    cmp al, '/'
+    jne .find_next
+    mov bx, si
+    inc bx
+.find_next:
+    inc si
+    jmp .find_tail
+
+.tail_found:
+    mov si, bx
+    mov cx, INFS_NAME_LEN
+    mov bx, di
+    add bx, INFS_OFF_NAME
+
+.copy:
+    cmp cx, 0
+    je .finish
+    mov al, [si]
+    cmp al, 0
+    je .terminate
+    cmp al, '/'
+    je .terminate
+    mov [bx], al
+    inc bx
+    inc si
+    dec cx
+    jmp .copy
+
+.terminate:
+    mov byte [bx], 0
+    inc bx
+    dec cx
+
+.zero_pad:
+    cmp cx, 0
+    je .finish
+    mov byte [bx], 0
+    inc bx
+    dec cx
+    jmp .zero_pad
+
+.finish:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; fs_leaf_is_arc
