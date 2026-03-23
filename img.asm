@@ -1,92 +1,86 @@
-; image.asm
-; full screen image viewer for CircleOS
-; CEX1 VERSION 1
-; load 265-colour pallete and 320*200 pixel data from disk and display on screen
-; shows using vga mode 0x13
+; img.asm - VGA image viewer for CircleOS
+; Displays 320x200 256-color image loaded from disk
+; Uses VGA mode 0x13 (320x200, 256 colors, linear VRAM at 0xA000)
 
-[BITS 16]
-[ORG 0xA000]
+[BITS 16]               ; 16-bit x86 real-mode
+[ORG 0xA000]            ; Loaded by kernel at this address
 
-; -------
-; Kernel syscall interface
-; -------
+; ================== KERNEL SYSCALL INTERFACE ==================
 SYSCALL_INT equ 0x80
-SYS_PUTC equ 0x01
-SYS_PUTS equ 0x02
-SYS_NEWLINE equ 0x03
-SYS_GETC equ 0x04
-SYS_CLEAR equ 0x05
-SYS_RUN equ 0x06
-SYS_READ_RAW equ 0x07
-CTRL_C equ 0x03
+SYS_PUTC equ 0x01       ; print character
+SYS_PUTS equ 0x02       ; print string
+SYS_NEWLINE equ 0x03    ; print CR+LF
+SYS_GETC equ 0x04       ; read keystroke
+SYS_CLEAR equ 0x05      ; clear screen
+SYS_RUN equ 0x06        ; launch program
+SYS_READ_RAW equ 0x07   ; read disk sectors
+CTRL_C equ 0x03         ; user abort
 
-; -------
-; build-time layout defines
-; -------
-; values from build.sh
+; ================== BUILD-TIME CONSTANTS ==================
+; These are set by build.sh based on disk layout
 %ifndef SPLASH_PAL_SECTOR
-SPLASH_PAL_SECTOR equ 25
+SPLASH_PAL_SECTOR equ 25 ; disk sector where palette data starts
 %endif
 
 %ifndef SPLASH_PAL_SECTORS
-SPLASH_PAL_SECTORS equ 2
+SPLASH_PAL_SECTORS equ 2 ; number of sectors for palette
 %endif
 
 %ifndef SPLASH_IMG_SECTOR
-SPLASH_IMG_SECTOR equ 27
-%endif
-%ifndef SPLASH_IMG_SECTORS
-SPLASH_IMG_SECTORS equ 125
+SPLASH_IMG_SECTOR equ 27 ; disk sector where image data starts
 %endif
 
-; -------
-; memory map for buffers
-; -------
-IMG_BUF_SEG equ 0x2000
-PAL_BUF_SEG equ 0x3000
+%ifndef SPLASH_IMG_SECTORS
+SPLASH_IMG_SECTORS equ 125 ; number of sectors for image (320*200 = 64KB)
+%endif
+
+; ================== MEMORY LAYOUT ==================
+; Image buffers are placed above kernel and shell in memory
+IMG_BUF_SEG equ 0x2000  ; buffer for image pixel data (64KB)
+PAL_BUF_SEG equ 0x3000  ; buffer for palette (768 bytes = 256 colors * 3 RGB bytes)
 
 start:
     mov ax, 0
-    mov ds, ax
+    mov ds, ax              ; DS = 0 for absolute addressing
+    mov es, ax              ; ES = 0 initially
+
+    ; Load palette from disk into memory buffer
+    mov ax, PAL_BUF_SEG     ; ES = segment for palette buffer
     mov es, ax
+    xor bx, bx              ; BX = offset 0 in palette buffer
+    mov al, SPLASH_PAL_SECTOR ; sector to start reading from
+    mov ah, SPLASH_PAL_SECTORS ; number of sectors to read
+    call read_sectors_linear ; load palette data
+    jc .read_fail           ; if error, show message and exit
 
-    ; Load palette data from disk into PAL_BUF
-    mov ax, PAL_BUF_SEG
-    mov es, ax  ; set ES to PAL_BUF_SEG for disk read
-    xor bx, bx  ; offset 0 in PAL_BUF
-    mov al, SPLASH_PAL_SECTOR ; start sector
-    mov ah, SPLASH_PAL_SECTORS ; total sectors to read
-    call read_sectors_linear
-    jc .read_fail
+    ; Load image from disk into memory buffer
+    mov ax, IMG_BUF_SEG     ; ES = segment for image buffer
+    mov es, ax
+    xor bx, bx              ; BX = offset 0 in image buffer
+    mov al, SPLASH_IMG_SECTOR ; sector to start reading from
+    mov ah, SPLASH_IMG_SECTORS ; number of sectors to read
+    call read_sectors_linear ; load image data
+    jc .read_fail           ; if error, show message and exit
 
-    ; read image data from disk into IMG_BUF
-    mov ax, IMG_BUF_SEG
-    mov es, ax  ; set ES to IMG_BUF_SEG for disk read
-    xor bx, bx  ; offset 0 in IMG_BUF
-    mov al, SPLASH_IMG_SECTOR ; start sector
-    mov ah, SPLASH_IMG_SECTORS ; total sectors to read
-    call read_sectors_linear
-    jc .read_fail
+    ; Switch to VGA 256-color mode 0x13 (320x200 graphics)
+    mov ax, 0x0013          ; BIOS INT 0x10 function 00: set video mode
+    int 0x10                ; call BIOS video interrupt
 
-    ; enter vga mode 0x13
-    mov ax, 0x0013
-    int 0x10
+    ; Load palette into VGA DAC (Digital-to-Analog Converter)
+    call vga_load_palette   ; write 256-color palette to hardware
 
-    ; push pallet into vga dac
-    call vga_load_palette
+    ; Copy image data from buffer to VRAM (0xA000)
+    call blit_image_to_vram ; blast 320*200 pixels to graphics memory
 
-    ;copy bytes to video memory
-    call blit_image_to_vram
-
-    ; wait for key press before exiting
-    xor ax, ax
+    ; Wait for user to press a key before exiting
+    xor ax, ax              ; BIOS INT 0x16 function 00: wait for keystroke
     int 0x16
 
-    ; return to colour text mode
-    mov ax, 0x0003
+    ; Return to text mode (80x25 color text)
+    mov ax, 0x0003          ; BIOS video mode 03: color text mode
     int 0x10
 
-    ret
+    ret                     ; return to shell
 
 .read_fail:
     mov si, msg_read_fail
@@ -94,112 +88,118 @@ start:
     call sys_newline
     ret
 
-; read_sectors_linear: read AL sectors starting from sector in AH into ES:BX
-; Inputs:
-; AL = start sector
-; AH = number of sectors to read
-; ES:BX = destination
+; read_sectors_linear - Read multiple disk sectors into memory
+; Input:
+;   AL = starting sector number (1-based)
+;   AH = number of sectors to read  
+;   ES:BX = destination buffer address
 ; Output:
-; cf cleared on success, set on failure
-; Clobbers:
-
+;   CF = 0 on success, 1 on failure
 read_sectors_linear:
-    mov [rs_sector], al
-    mov [rs_left], ah
+    mov [rs_sector], al     ; save starting sector
+    mov [rs_left], ah       ; save count of sectors left to read
 
 .loop:
-    cmp byte [rs_left], 0
-    je .ok
+    cmp byte [rs_left], 0   ; all sectors read?
+    je .ok                  ; yes, success
 
-    mov ah, SYS_READ_RAW
-    mov al, 1 ; read one sector at a time
-    mov ch, 0
-    mov cl, [rs_sector]
-    mov dh, 0
-    int SYSCALL_INT
-    cmp ah, 0
-    jne .fail
+    ; Call kernel syscall SYS_READ_RAW to read one sector
+    mov ah, SYS_READ_RAW    ; syscall 0x07
+    mov al, 1               ; read exactly 1 sector per call
+    mov ch, 0               ; cylinder (not used, set to 0)
+    mov cl, [rs_sector]     ; sector number
+    mov dh, 0               ; head (not used, set to 0)
+    int SYSCALL_INT         ; call kernel
+    cmp ah, 0               ; AH=0 means success
+    jne .fail               ; AH!=0 means error
 
-    inc byte [rs_sector]
-    add bx, 512
-    dec byte [rs_left]
+    ; Advance to next sector and buffer position
+    inc byte [rs_sector]    ; next sector number
+    add bx, 512             ; advance buffer pointer by 1 sector
+    dec byte [rs_left]      ; one less sector to read
     jmp .loop
 
-
 .ok:
-    clc
+    clc                     ; CF=0 (success)
     ret
 
 .fail:
-    stc
+    stc                     ; CF=1 (error)
     ret
 
-; vga_load_palette
-; reads 256 rgb triplets from pal buf and writes to dac
-; dac protpcol:
-; port 0x3c8 is starting pallete index
-; port 0x3c9 is rgb data (3 writes per index)
-
+; vga_load_palette - Write 256 RGB colors to VGA DAC
+; This implements the VGA DAC protocol:
+; Port 0x3C8: write palette index (0-255)
+; Port 0x3C9: write RGB values (3 sequential OUTs = R, G, B)
+; Inputs: Palette buffer at PAL_BUF_SEG contains 768 bytes (256 * 3 RGB)
 vga_load_palette:
-    mov ax, PAL_BUF_SEG
+    mov ax, PAL_BUF_SEG     ; set DS to palette buffer segment
     mov ds, ax
-    xor si, si ; offset 0 in pal buf
+    xor si, si              ; SI = offset 0 (start of palette data)
 
-    mov dx, 0x3c8
-    xor al, al ; start at palette index 0
-    out dx, al
+    mov dx, 0x3c8           ; DX = DAC write index port
+    xor al, al              ; AL = 0 (start at palette index 0)
+    out dx, al              ; write starting index
 
-    inc dx ; now dx = 0x3c9 for rgb data
-    mov cx, 256 ; 256 palette entries
+    inc dx                  ; DX = 0x3c9 (DAC data port, for RGB values)
+    mov cx, 256             ; load all 256 colors
 
 .colour_loop:
-    lodsb ; load red
-    out dx, al
-    lodsb ; load green
-    out dx, al
-    lodsb ; load blue
-    out dx, al
+    lodsb                   ; load red component from palette buffer
+    out dx, al              ; write red to DAC
+    lodsb                   ; load green component
+    out dx, al              ; write green to DAC
+    lodsb                   ; load blue component
+    out dx, al              ; write blue to DAC
 
-    loop .colour_loop
+    loop .colour_loop       ; repeat for all 256 colors
 
-    ; restore ds for program labels and syscalls
+    ; Restore DS for program's normal memory access
     xor ax, ax
     mov ds, ax
     ret
 
-; blit_image_to_vram
-; copies 320*200 bytes from IMG_BUF to vga memory at 0xa000
+; blit_image_to_vram - Copy image pixel data to VGA VRAM
+; Copies 320*200 = 64000 bytes from IMG_BUF to graphics memory
+; In VGA mode 0x13, VRAM is at segment 0xA000, linear addressing 0-63999
 blit_image_to_vram:
-    mov ax, IMG_BUF_SEG
+    mov ax, IMG_BUF_SEG     ; DS = image buffer segment
     mov ds, ax
-    mov ax, 0xA000
+    mov ax, 0xA000          ; ES = VGA VRAM segment
     mov es, ax
 
-    xor si, si ; offset 0 in img buf
-    xor di, di ; offset 0 in vram
-    mov cx, 320*200 ; total pixels
-    cld
-    rep movsb
+    xor si, si              ; SI = offset 0 in image buffer
+    xor di, di              ; DI = offset 0 in VRAM
+    mov cx, 320*200         ; CX = total pixel count (320 width * 200 height)
+    cld                     ; clear direction flag (auto-increment addresses)
+    rep movsb               ; bulk copy SI->DI, CX times (copies bytes)
 
-    ;restore ds for program labels and syscalls
+    ; Restore DS for program labels and syscalls
     xor ax, ax
     mov ds, ax
     ret
 
+; ================== SYSCALL WRAPPER FUNCTIONS ==================
+
+; sys_puts - Print null-terminated string to console
+; Input: DS:SI = string address  
 sys_puts:
-    mov ah, SYS_PUTS
+    mov ah, SYS_PUTS        ; syscall 0x02
     int SYSCALL_INT
     ret
 
+; sys_newline - Print carriage return and line feed  
 sys_newline:
-    mov ah, SYS_NEWLINE
+    mov ah, SYS_NEWLINE     ; syscall 0x03
     int SYSCALL_INT
     ret
+
+; ================== ERROR MESSAGES ==================
 
 msg_read_fail:
     db "img: Failed to read from disk", 0
 
-rs_sector:
-    db 0
-rs_left:
-    db 0
+; ================== WORKING DATA ==================
+
+rs_sector:              db 0    ; current sector number during sequential reads
+rs_left:                db 0    ; number of sectors remaining to read
