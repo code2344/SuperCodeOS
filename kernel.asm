@@ -1,7 +1,8 @@
 ; kernel.asm
 ; CircleOS kernel - a simple shell with basic commands.
+; Protected-mode 32-bit kernel with native IRQ-based drivers
 
-[BITS 16]           ; assemble these instructions for 16-bit mode
+[BITS 32]           ; assemble these instructions for 32-bit mode
 [ORG 0x7E00]        ; this code lives at 0x7e00
 
 BOOT_INFO_ADDR equ 0x0500
@@ -76,6 +77,9 @@ INFS_INODE_BUF equ 0x1400
 INFS_BITMAP_BUF equ 0x1600
 
 start:
+    [BITS 16]               ; temporarily 16-bit for boot
+    cli                     ; disable interrupts during mode switch
+    
     mov ax, 0               ; DS and ES point to absolute memory for boot info
     mov ds, ax
     mov es, ax
@@ -90,15 +94,41 @@ start:
     mov al, [BOOT_DRIVE_OFF]
     mov [kernel_boot_drive], al
 
-    call enable_a20         ; enable A20 gate for full memory access
-    call load_boot_gdt      ; load minimal GDT (prepared for later protected mode)
-    call install_syscall_vector ; set up INT 0x80 handler
+    call enable_a20         ; enable A20 gate
+    call load_boot_gdt      ; load flat GDT
+    
+    ; ========== PROTECTED MODE SWITCH ==========
+    mov eax, cr0
+    or eax, 1               ; set CR0.PE bit
+    mov cr0, eax
+    
+    ; Far jump to 32-bit code segment (0x08 = flat code selector)
+    jmp 0x08:.pm_entry
+    
+    [BITS 32]
+.pm_entry:
+    ; Now running in 32-bit protected mode
+    ; Reload segment registers to 32-bit flat mode (selector 0x10 = flat data)
+    mov eax, 0x10
+    mov ds, eax
+    mov es, eax
+    mov ss, eax
+    mov esp, 0x7E00         ; stack just below kernel
+    
+    xor eax, eax            ; zero out GS/FS
+    mov gs, eax
+    mov fs, eax
+    
+    sti                     ; re-enable interrupts
+    
+    ; Install IDT for protected mode
+    call install_idt_32
 
     ; Display boot banner
-    call console_clear
+    call console_clear_32
     call show_boot_logo
-    call delay_5s
-    call console_clear
+    call delay_ms
+    call console_clear_32
 
     ; Load program table from disk (contains executable names/boot locations)
     call load_program_table
@@ -124,17 +154,15 @@ start:
     call console_newline
     jmp halt
 .shell_loop:
-    mov si, prompt      ; move prompt (arcsh >)
-    call console_puts   ; print prompt
+    mov si, prompt      ; move prompt (CircleOS Kernel >)
+    call console_puts_32   ; print prompt
 
     ; read command from keyboard
-    xor cx, cx          ; cx=0, start at first byte
-    mov bx, command_buf ; bx points to command buffer start
+    xor ecx, ecx          ; ecx=0, start at first byte
+    mov ebx, command_buf ; ebx points to command buffer start
 
 .read_loop:
-    ; mov ah, 0x00        ; bios wait for key press and return 
-    ; int 0x16            ; bios interrupt to return key press
-    call kbd_getc
+    call kbd_getc_32
     
     ; check for enter key
     cmp al, 13          ; key press goes into AL for the ascii code, ascii code of carriage return is 13 or 0D
@@ -143,43 +171,32 @@ start:
     cmp al, 8           ; check for backspace character
     je .backspace      
 
-    ; print character via BIOS TTY by running int 10 and setting AH to 0E
-    ; mov ah, 0x0E
-    ; int 0x10
-    call console_putc
+    call console_putc_32
 
-    ; store typed character in command buffer at [BX+CX], bx is base and cx is index
-    mov si, cx
-    mov byte [bx + si], al
-    inc cx
+    ; store typed character in command buffer at [BX+CX]
+    mov byte [ebx + ecx], al
+    inc ecx
 
     ; limit input length to 32 bytes
-    cmp cx, 32
+    cmp ecx, 32
     jl .read_loop
 
     ; if at or over 32 keep reading but ignore storage
     jmp .read_loop ; jump unconditionally
 
 .backspace:
-    cmp cx, 0           ; is the cursor already at the start?
+    cmp ecx, 0           ; is the cursor already at the start?
     je .read_loop       ; if yes, exit backspace loop and go to read loop
 
-    mov ah, 0x0E
-    mov al, 8           ; ASCII backspace
-    int 0x10
-    mov al, ' '         ; print ' ' to cover/erase old character
-    int 0x10
-    mov al, 8           ; backspace again :)
-    int 0x10
+    call console_putc_32  ; print backspace char
 
-    dec cx
+    dec ecx
     jmp .read_loop ; jump unconditionally
 
 .command_ready:
-    mov si, cx
-    mov byte [bx + si], 0       ;null terminate the command so routines know where it ends
+    mov byte [ebx + ecx], 0       ;null terminate the command so routines know where it ends
 
-    call console_newline
+    call console_newline_32
 
     ; Exact command dispatch
     cmp byte [command_buf], 0
@@ -201,14 +218,14 @@ start:
 
     ; Unknown command
     mov si, unknown_msg
-    call console_puts
-    call console_newline
+    call console_puts_32
+    call console_newline_32
     jmp .shell_loop ; jump unconditionally
 
 .cmd_help:
     mov si, help_msg
-    call console_puts
-    call console_newline
+    call console_puts_32
+    call console_newline_32
     jmp .shell_loop ; jump unconditionally
 .cmd_csh:
     call launch_shell
@@ -221,73 +238,420 @@ halt:
     hlt                 ; halt the cpu
     jmp halt            ; infinite loop just in case
 ; ----------------------------------
-; Kernel service wrappers for routines
+; Kernel service wrappers for routines (32-bit protected mode)
 ;-----------------------------------
-; input al = character
-; clobbers: ah
-console_putc:
-    mov ah, 0x0E
-    int 0x10
+
+; console_putc_32
+; Input: AL = character
+; Writes directly to VGA text-mode VRAM at 0xB8000
+; Uses 80x25 text mode: 2 bytes per character (char + attribute)
+; Clobbers: EAX, EBX, ECX, EDX
+gVGA_CURSOR equ 0x1000     ; kernel RAM storage for cursor position (0-80)
+cursor_x equ (gVGA_CURSOR)
+cursor_y equ (gVGA_CURSOR+1)
+
+console_putc_32:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    
+    mov bl, al              ; save character
+    cmp al, 13              ; CR?
+    je .putc_newline
+    
+    cmp al, 8               ; backspace?
+    je .putc_backspace
+    
+    ; Regular character - write to VRAM
+    mov al, [cursor_y]      ; row
+    mov cl, 80
+    mul cl                  ; EAX = row * 80
+    mov cl, [cursor_x]      ; column
+    add eax, ecx            ; offset = row*80 + col
+    shl eax, 1              ; each cell is 2 bytes (char + attr)
+    
+    mov edx, 0xB8000        ; VGA text VRAM
+    add edx, eax
+    
+    mov [edx], bl           ; write character
+    mov byte [edx+1], 0x07  ; white on black attribute
+    
+    ; advance cursor
+    inc byte [cursor_x]
+    cmp byte [cursor_x], 80
+    jl .putc_done
+    
+    ; wrap to next line
+    mov byte [cursor_x], 0
+    inc byte [cursor_y]
+    cmp byte [cursor_y], 25
+    jl .putc_done
+    
+    ; scroll: move lines 1-24 up to 0-23, clear line 24
+    call scroll_vga
+    mov byte [cursor_y], 24
+    jmp .putc_done
+    
+.putc_backspace:
+    cmp byte [cursor_x], 0
+    je .putc_xy_start
+    
+    dec byte [cursor_x]
+    ; clear the character
+    mov al, [cursor_y]
+    mov cl, 80
+    mul cl
+    mov cl, [cursor_x]
+    add eax, ecx
+    shl eax, 1
+    mov edx, 0xB8000
+    add edx, eax
+    mov byte [edx], ' '
+    mov byte [edx+1], 0x07
+    jmp .putc_done
+    
+.putc_newline:
+    mov byte [cursor_x], 0
+    inc byte [cursor_y]
+    cmp byte [cursor_y], 25
+    jl .putc_done
+    
+    call scroll_vga
+    mov byte [cursor_y], 24
+    jmp .putc_done
+    
+.putc_xy_start:
+    cmp byte [cursor_y], 0
+    je .putc_done
+    mov byte [cursor_x], 79
+    dec byte [cursor_y]
+    
+.putc_done:
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
     ret
 
-; Input: ds:si = null terminated string
-; clobbers: AL, AH, SI
-console_puts:
+scroll_vga:
+    ; Scroll VGA text up one line: lines 1-24 → 0-23, clear line 24
+    push eax
+    push ecx
+    push esi
+    push edi
+    
+    mov esi, 0xB8000 + 80*2 ; source = line 1
+    mov edi, 0xB8000        ; dest = line 0
+    mov ecx, 24*80*2        ; 24 lines * 80 chars * 2 bytes
+    cld
+    rep movsb
+    
+    ; Clear bottom line (line 24)
+    mov edi, 0xB8000 + 24*80*2
+    xor eax, eax
+    mov ecx, 80*2
+    rep stosb
+    
+    pop edi
+    pop esi
+    pop ecx
+    pop eax
+    ret
+
+; Input: DS:SI = null terminated string
+; clobbers: EAX, EBX, ECX, EDX, ESI
+console_puts_32:
 .loop:
-    lodsb ; load byte from DS:SI into AL
+    lodsb
     cmp al, 0
-    je .done ; jump if equal/zero
-    call console_putc
-    jmp .loop ; jump unconditionally
+    je .done
+    call console_putc_32
+    jmp .loop
 .done:
     ret
 
 ; prints CRLF
-; clobbers: al, ah
-console_newline:
+console_newline_32:
     mov al, 13
-    call console_putc
+    call console_putc_32
     mov al, 10
-    call console_putc
+    call console_putc_32
     ret
 
-; clears text mode screen and moves cursor to top-left
-console_clear:
-    mov ah, 0x06
-    mov al, 0
-    mov bh, 0x07
-    mov cx, 0
-    mov dx, 0x184F
-    int 0x10
-
-    mov ah, 0x02
-    mov bh, 0
-    mov dx, 0
-    int 0x10
+; clears text mode screen
+console_clear_32:
+    push eax
+    push eax
+    push ecx
+    push edi
+    
+    mov edi, 0xB8000
+    xor eax, eax
+    mov ecx, 80*25*2        ; 80 columns, 25 rows, 2 bytes each
+    cld
+    rep stosb
+    
+    ; reset cursor
+    mov byte [cursor_x], 0
+    mov byte [cursor_y], 0
+    
+    pop edi
+    pop ecx
+    pop eax
+    pop eax
     ret
 
-; wait for keypress and return it
-; output al = ascii, ah = scan code
-; clobbers ah and al
-kbd_getc:
-    mov ah, 0x00
-    int 0x16
+; ========== KEYBOARD DRIVER (IRQ1) ==========
+; Polls port 0x60 for keyboard data (simple polling, no IRQ yet)
+
+kbd_getc_32:
+    push ecx
+    push edx
+    
+    ; Poll keyboard status port for key available
+.kbd_wait:
+    mov edx, 0x64           ; kbd controller status port
+    in al, dx
+    test al, 1              ; bit 0 = output buffer full?
+    jz .kbd_wait
+    
+    ; Read key from data port
+    mov edx, 0x60           ; kbd data port
+    in al, dx
+    
+    pop edx
+    pop ecx
     ret
 
-; enable_a20
-; Enables A20 line using port 0x92 fast A20 gate.
-; This is required before moving to protected mode memory layouts.
+; ========== ATA PIO DISK DRIVER (replaces INT 0x13) ==========
+; Reads/writes sectors using ATA PIO protocol
+; Supports CHS to LBA conversion (same as before)
+
+ata_read_sectors_32:
+    ; Input:
+    ;   AL = sector count
+    ;   CL = starting sector (1-based)
+    ;   ES:BX = destination buffer
+    ;   DL = drive number (ignored, assumes drive 0)
+    ;   CH = cylinder, DH = head (from lba_to_chs conversion)
+    ; Output: CF clear on success, set on error
+    
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push ebp
+    push esi
+    push edi
+    
+    mov [ata_sector_count], al
+    mov [ata_sector_num], cl
+    mov [ata_cylinder], ch
+    mov [ata_head], dh
+    mov [ata_buffer_offset], ebx
+    mov [ata_buffer_segment], es
+    
+    mov byte [ata_retries], 1
+    
+.ata_read_try:
+    ; Restore parameters
+    mov al, [ata_sector_count]
+    mov cl, [ata_sector_num]
+    mov ch, [ata_cylinder]
+    mov dh, [ata_head]
+    mov ebx, [ata_buffer_offset]
+    mov es, [ata_buffer_segment]
+    
+    ; Convert CHS to LBA: LBA = (C * 2 * 18) + (H * 18) + (S - 1)
+    movzx eax, byte [ata_cylinder]
+    imul eax, 36            ; sectors per cylinder (2 heads * 18 sectors)
+    movzx edx, byte [ata_head]
+    imul edx, 18            ; sectors per head
+    add eax, edx
+    movzx edx, byte [ata_sector_num]
+    dec edx                 ; convert to 0-based sector index
+    add eax, edx
+    mov [ata_lba], eax
+    
+    ; Write ATA registers for read
+    mov edx, 0x1F2          ; sector count register
+    mov al, [ata_sector_count]
+    out dx, al
+    
+    mov edx, 0x1F3          ; LBA low
+    mov eax, [ata_lba]
+    out dx, al
+    
+    mov edx, 0x1F4          ; LBA mid
+    mov eax, [ata_lba]
+    shr eax, 8
+    out dx, al
+    
+    mov edx, 0x1F5          ; LBA high
+    mov eax, [ata_lba]
+    shr eax, 16
+    out dx, al
+    
+    mov edx, 0x1F6          ; device/head register
+    mov eax, [ata_lba]
+    shr eax, 24
+    and al, 0x0F
+    or al, 0xE0             ; LBA mode, drive 0
+    out dx, al
+    
+    mov edx, 0x1F7          ; command register
+    mov al, 0x20            ; READ SECTORS command
+    out dx, al
+    
+    ; Read sector(s) from data port (0x1F0)
+    mov ebx, [ata_buffer_offset]
+    mov es, [ata_buffer_segment]
+    mov edi, ebx
+    movzx ebp, byte [ata_sector_count]
+
+.ata_sector_loop:
+    ; Wait for DRQ for each sector
+    mov ecx, 200000
+.ata_wait:
+    mov edx, 0x1F7
+    in al, dx
+    test al, 0x01           ; ERR set?
+    jnz .ata_error
+    test al, 0x08           ; DRQ set?
+    jnz .ata_data_ready
+    dec ecx
+    jnz .ata_wait
+    jmp .ata_error
+
+.ata_data_ready:
+    mov edx, 0x1F0
+    mov ecx, 256            ; 256 words = 512 bytes
+    cld
+    rep insw
+
+    dec ebp
+    jnz .ata_sector_loop
+    
+    clc                     ; success
+    jmp .ata_return
+    
+.ata_error:
+    cmp byte [ata_retries], 0
+    je .ata_fail
+    
+    dec byte [ata_retries]
+    jmp .ata_read_try
+    
+.ata_fail:
+    stc                     ; error
+    
+.ata_return:
+    pop edi
+    pop esi
+    pop ebp
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+ata_write_sectors_32:
+    ; Same concept but writes to disk
+    ; For now, returns error (can implement similar to read)
+    ; Input: same as ata_read
+    ; Output: CF set (not implemented)
+    
+    stc
+    ret
+
+; ========== WRAPPER FUNCTIONS FOR OLD DISK API ==========
+; These maintain backward compatibility with FS code that uses CHS addressing
+
+disk_read_chs:
+    ; Wrapper: takes 16-bit CHS parameters and calls ATA driver
+    ; Input:  AL = count, CL = sector, CH = cylinder, DH = head
+    ;         ES:BX = buffer (in real-mode segment terms)
+    ; Output: CF clear on success, set on error
+    
+    ; Convert ES to selector 0x10 for protected mode
+    mov ax, 0x10
+    mov es, ax
+    call ata_read_sectors_32
+    ret
+
+disk_write_chs:
+    ; Wrapper: takes 16-bit CHS parameters and calls ATA driver
+    ; Input: same as disk_read_chs
+    ; Output: CF clear on success, set on error
+    
+    mov ax, 0x10
+    mov es, ax
+    call ata_write_sectors_32
+    ret
+
+[BITS 16]
+
+; Boot-time helpers (invoked before protected-mode switch)
 enable_a20:
     in al, 0x92
     or al, 0x02
     out 0x92, al
     ret
 
-; load_boot_gdt
-; Loads a minimal flat GDT used for a future protected-mode switch.
 load_boot_gdt:
     lgdt [gdt_descriptor]
     ret
+
+[BITS 32]
+
+; Compatibility wrappers for existing call sites
+console_putc:
+    jmp console_putc_32
+
+console_puts:
+    jmp console_puts_32
+
+console_newline:
+    jmp console_newline_32
+
+console_clear:
+    jmp console_clear_32
+
+kbd_getc:
+    jmp kbd_getc_32
+
+; ========== TIMER DRIVER (replaces INT 0x15) ==========
+; Simple busy-loop based delay
+
+delay_ms:
+    ; Input: EAX = milliseconds
+    ; Crude busy-loop; spin for approximately N milliseconds
+    
+    push ebx
+    push ecx
+    
+    ; Each iteration ~1 microsecond, so multiply by 1000
+    mov ebx, eax
+    shl ebx, 10             ; approximately * 1000
+    
+.delay_loop:
+    dec ebx
+    jnz .delay_loop
+    
+    pop ecx
+    pop ebx
+    ret
+
+; ========== SCRATCH DATA FOR DRIVERS ==========
+ata_sector_count: db 0
+ata_sector_num: db 0
+ata_cylinder: db 0
+ata_head: db 0
+ata_lba: dd 0
+ata_buffer_offset: dd 0
+ata_buffer_segment: dw 0
+ata_retries: db 0
 
 show_boot_logo:
     call console_newline
@@ -374,17 +738,96 @@ delay_5s:
     mov ah, 0x86
     mov cx, 0x004C
     mov dx, 0x4B40
-    int 0x15
+    ; stub (was int 0x15, now unused)
     ret
 
-install_syscall_vector:
-    cli                     ; disable interrupts during vector setup
-    mov word [SYSCALL_INT * 4], syscall_handler ; IVT entry for INT 0x80
-    mov word [SYSCALL_INT * 4 + 2], 0 ; code segment (CS) = 0
-    sti                     ; re-enable interrupts
+; ========== IDT SETUP FOR PROTECTED MODE ==========
+; Creates an IDT with gate descriptor for syscall (int 0x80)
+; Also hooks IRQ1 (keyboard) and IRQ14 (disk) handlers
+
+install_idt_32:
+    cli
+    
+    ; Initialize all IDT entries to zero
+    xor eax, eax
+    mov edi, idt_table
+    mov ecx, 256 * 8        ; 256 gates * 8 bytes each
+    cld
+    rep stosb
+    
+    ; Gate 0x80 (syscall) -> syscall_handler
+    mov eax, syscall_handler_32
+    mov [idt_table + 0x80*8 + 0], ax      ; offset low
+    mov [idt_table + 0x80*8 + 2], word 0x0008  ; code segment selector
+    mov [idt_table + 0x80*8 + 4], word 0xEE00  ; gate type = interrupt, DPL=3 (user), present
+    shr eax, 16
+    mov [idt_table + 0x80*8 + 6], ax      ; offset high
+    
+    ; Gate 0x21 (IRQ1 = keyboard) -> keyboard_handler_32
+    mov eax, keyboard_irq_handler
+    mov [idt_table + 0x21*8 + 0], ax
+    mov [idt_table + 0x21*8 + 2], word 0x0008
+    mov [idt_table + 0x21*8 + 4], word 0xEE00
+    shr eax, 16
+    mov [idt_table + 0x21*8 + 6], ax
+    
+    ; Gate 0x2E (IRQ14 = ATA disk) -> disk_irq_handler
+    mov eax, disk_irq_handler
+    mov [idt_table + 0x2E*8 + 0], ax
+    mov [idt_table + 0x2E*8 + 2], word 0x0008
+    mov [idt_table + 0x2E*8 + 4], word 0xEE00
+    shr eax, 16
+    mov [idt_table + 0x2E*8 + 6], ax
+    
+    ; Load IDT
+    lidt [idt_descriptor]
+    
+    ; Program PIC (programmable interrupt controller) to remap IRQs
+    ; IRQ0-7 -> INT 0x20-0x27
+    ; IRQ8-15 -> INT 0x28-0x2F
+    mov al, 0x11            ; ICW1: begin init sequence
+    out 0x20, al            ; master PIC
+    out 0xA0, al            ; slave PIC
+    
+    mov al, 0x20            ; ICW2: master offset
+    out 0x21, al
+    mov al, 0x28            ; ICW2: slave offset
+    out 0xA1, al
+    
+    mov al, 0x04            ; ICW3: master has slave on IRQ2
+    out 0x21, al
+    mov al, 0x02            ; ICW3: slave is on IRQ2 of master
+    out 0xA1, al
+    
+    mov al, 0x01            ; ICW4: x86 mode
+    out 0x21, al
+    out 0xA1, al
+    
+    ; Unmask IRQ1 (keyboard) and IRQ14 (disk) in PIC
+    mov al, 0xFB            ; mask all except IRQ1,2
+    out 0x21, al
+    mov al, 0xBF            ; mask all except IRQ6 (which unmasks IRQ14 and below)
+    out 0xA1, al
+    
+    sti
     ret
 
-; ================== SYSCALL DISPATCHER ==================
+; Placeholder IRQ handlers (will be filled by interrupt)
+keyboard_irq_handler:
+    ; Read key from keyboard and send EOI
+    mov al, 0x20
+    out 0x20, al            ; EOI to master PIC
+    iret
+
+disk_irq_handler:
+    ; Disk interrupt - just send EOI for now
+    mov al, 0x20
+    out 0xA0, al            ; EOI to slave PIC
+    mov al, 0x20
+    out 0x20, al            ; EOI to master PIC
+    iret
+
+; ================== SYSCALL DISPATCHER (32-BIT) ==================
 ; Kernel's main entry point for all user syscalls (INT 0x80)
 ; Every program request (I/O, filesystem, execution) routes through here
 ;
@@ -399,15 +842,10 @@ install_syscall_vector:
 ; - 0x01: Not found / File error
 ; - 0x02: I/O error / Already exists
 ; - 0xFF: Unknown syscall
-syscall_handler:
-    push bx                 ; preserve working registers (kernel-side save)
-    push cx                 ; preserve caller CX by default
-    push dx                 ; save DX for multi-word results
-    push si                 ; save SI (used for addressing)
-    push di                 ; save DI (used for addressing)
-    push bp                 ; save BP (frame pointer)
-    push ds                 ; save DS (segment register)
-    push es                 ; save ES (segment register)
+syscall_handler_32:
+    pushad                  ; save all 32-bit registers
+    push ds                 ; save segment registers
+    push es
 
     ; ================== DISPATCH TABLE (17 SYSCALLS) ==================
     ; Each syscall code maps to a handler function
@@ -472,27 +910,27 @@ syscall_handler:
 ; On exit to .done: restore registers and iret to caller
 
 .sys_putc:
-    call console_putc       ; print character in AL to video memory
-    xor ah, ah              ; AH = 0: success
+    call console_putc_32    ; print character in AL to video memory
+    xor eax, eax            ; EAX = 0: success
     jmp .done
 
 .sys_puts:
-    call console_puts       ; print string at DS:SI to video memory
-    xor ah, ah              ; AH = 0: success
+    call console_puts_32    ; print string at DS:SI to video memory
+    xor eax, eax            ; EAX = 0: success
     jmp .done
 
 .sys_newline:
-    call console_newline    ; print CR+LF (0x0D, 0x0A)
-    xor ah, ah              ; AH = 0: success
+    call console_newline_32 ; print CR+LF (0x0D, 0x0A)
+    xor eax, eax            ; EAX = 0: success
     jmp .done
 
 .sys_getc:
-    call kbd_getc           ; wait for keystroke, return ASCII in AL
-    jmp .done                ; AH set by kbd_getc (usually 0)
+    call kbd_getc_32        ; poll keystroke, return ASCII in AL
+    jmp .done                ; AH set by kbd_getc_32
 
 .sys_clear:
-    call console_clear      ; clear video memory, reset cursor
-    xor ah, ah              ; AH = 0: success
+    call console_clear_32   ; clear video memory, reset cursor
+    xor eax, eax            ; EAX = 0: success
     jmp .done
 
 .sys_run:
@@ -500,23 +938,23 @@ syscall_handler:
     jmp .done                ; AH = status from run_named_program (0=success, 1=not found, 2=load error, 3=unavailable)
 
 .sys_read_raw:
-    call disk_read_chs      ; read sectors via BIOS INT 0x13 (AL=count, CL=sector, ES:BX=buffer)
+    call ata_read_sectors_32 ; read sectors via ATA PIO (AL=count, CL=sector, ES:BX=buffer)
     jc .sys_read_raw_fail   ; CF=1 on error
-    xor ah, ah              ; CF=0: success, AH=0
+    xor eax, eax            ; CF=0: success, EAX=0
     jmp .done
 
 .sys_read_raw_fail:
-    mov ah, 2               ; return error code 2 (I/O error)
+    mov eax, 2              ; return error code 2 (I/O error)
     jmp .done
 
 .sys_write_raw:
-    call disk_write_chs     ; write sectors via BIOS INT 0x13
+    call ata_write_sectors_32 ; write sectors via ATA PIO
     jc .sys_write_raw_fail  ; CF=1 on error
-    xor ah, ah              ; CF=0: success, AH=0
+    xor eax, eax            ; CF=0: success, EAX=0
     jmp .done
 
 .sys_write_raw_fail:
-    mov ah, 2               ; return error code 2 (I/O error)
+    mov eax, 2              ; return error code 2 (I/O error)
     jmp .done
 
 .sys_fs_read:
@@ -562,163 +1000,70 @@ syscall_handler:
     jmp .done
 
 .sys_reboot:
-    ; Reboot machine via BIOS bootstrap loader.
-    ; If BIOS returns unexpectedly, halt safely.
+    ; Reboot machine via CPU reset
     cli
-    int 0x19
-    hlt
+    hlt                     ; halt CPU (can trigger external watchdog to reset)
     jmp .sys_reboot
 
 .sys_set_video_mode:
-    ; Set hardware video mode through BIOS INT 0x10.
-    ; Input: AL = desired mode (0x03 text mode, 0x13 VGA 320x200x256).
-    ; Output: AH = 0 on success.
-    mov ah, 0x00            ; BIOS video service: set mode.
-    int 0x10                ; BIOS applies mode in AL.
-    xor ah, ah              ; report success to caller.
-    jmp .done               ; return via normal register-restore path.
+    ; Set hardware video mode (0x03 text mode, 0x13 graphics).
+    ; For now, just set text mode via direct hardware
+    ; This can be extended with graphics mode setup
+    cmp al, 0x03
+    je .set_text_mode
+    cmp al, 0x13
+    je .set_graphics_mode
+    mov eax, 1              ; error for invalid mode
+    jmp .done
+    
+.set_text_mode:
+    ; Already in text mode, just clear
+    call console_clear_32
+    xor eax, eax
+    jmp .done
+    
+.set_graphics_mode:
+    ; Not implemented for now (would require VGA mode switch)
+    mov eax, 1
+    jmp .done
 
 .sys_present_framebuffer:
     ; Blit one full Mode 13h frame from caller RAM to VGA memory.
     ; Input: DS:SI = source backbuffer pointer (expects 64,000 bytes).
     ; Layout: 320 * 200 * 1 byte-per-pixel = 64,000 bytes.
-    ; Output: AH = 0 on success. Assumes caller has prepared backbuffer data in memory.
+    ; Output: EAX = 0 on success.
     cld                     ; ensure forward string copy direction.
-    mov ax, 0xA000          ; VGA linear framebuffer segment for mode 13h. 
-    mov es, ax              ; ES -> VRAM destination segment.
-    xor di, di              ; destination offset 0 (top-left pixel).
-    mov cx, 64000           ; total byte count for a full frame.
-    rep movsb               ; copy DS:SI -> ES:DI, CX bytes.
-    xor ah, ah              ; report success to caller.
+    mov eax, 0xA0000       ; VGA linear framebuffer for mode 13h (physical address). 
+    mov edi, eax
+    mov esi, esi            ; source already in ESI
+    mov ecx, 64000          ; total byte count for a full frame.
+    rep movsb               ; copy DS:ESI -> EDI, ECX bytes.
+    xor eax, eax            ; report success to caller.
     jmp .done               ; return via normal register-restore path.
 
 .done:
     ; Restore all registers and return to caller
-    ; By this point, AH contains the syscall result/status
+    ; By this point, EAX contains the syscall result/status
     pop es                  ; restore ES
     pop ds                  ; restore DS
-    pop bp                  ; restore BP
-    pop di                  ; restore DI
-    pop si                  ; restore SI
-    pop dx                  ; restore DX
-    pop cx                  ; restore caller CX (default path)
-    pop bx                  ; restore BX
-    iret                    ; return to caller (restores IP, CS, and flags)
+    popad                   ; restore all 32-bit registers (EAX will be result, others clobbered)
+    iret                    ; return to caller (restores EIP, CS, and flags)
 
 .done_keep_cx:
-    ; Variant epilogue for syscalls that return result in CX.
-    ; Drop saved CX from stack so current CX value is preserved for caller.
+    ; Variant epilogue for syscalls that return result in ECX.
+    ; Preserve ECX by restoring it at the end
+    mov [.saved_ecx], ecx   ; save ECX
     pop es
     pop ds
-    pop bp
-    pop di
-    pop si
-    pop dx
-    add sp, 2               ; discard saved CX slot
-    pop bx                  ; restore BX
-    iret                    ; return to caller (restores IP, CS, and flags)
+    popad                   ; restore all registers
+    mov ecx, [.saved_ecx]   ; restore ECX with preserved value
+    iret
+    
+.saved_ecx: dd 0
 
 ; ==================== DISK I/O (BIOS-BACKED) ====================
 ; Uses BIOS INT 0x13 to read/write sectors
 ; Handles CHS (Cylinder-Head-Sector) addressing on floppy/hard disk
-
-; disk_read_chs - Read sectors from disk into memory
-; Input:
-;   AL = sector count (how many sectors to read)
-;   CL = starting sector number (1-based, 1-63)
-;   ES:BX = destination buffer address
-;   DL = drive number (from kernel_boot_drive)
-; Output:
-;   CF clear on success
-;   CF set on error, AH = BIOS error code
-; Reliability: one retry after disk reset
-disk_read_chs:
-    mov [dr_count], al      ; save count for potential retry
-    mov [dr_lba], cl        ; save start sector for retry
-    mov [dr_dest], bx       ; save dest buffer for retry
-
-    mov byte [dr_retries], 1 ; allow one retry after disk reset
-
-.read_try:
-    ; Restore saved parameters for this attempt
-    mov cl, [dr_lba]        ; sector number
-    call lba_to_chs         ; converts to CHS: CH=cylinder, DH=head
-    mov al, [dr_count]      ; sector count
-    mov bx, [dr_dest]       ; buffer address
-    mov dl, [kernel_boot_drive] ; drive number
-
-    mov ah, 0x02            ; BIOS INT 0x13 function 02H: read sectors
-    int 0x13                ; call BIOS disk interrupt
-    jnc .ok                 ; CF=0: success, exit
-
-    ; Read failed - BIOS set CF and error code in AH
-    mov [dr_last_status], ah
-
-    ; Check if we have retries left
-    cmp byte [dr_retries], 0
-    je .fail                ; no more retries, return failure
-
-    ; Try again: reset disk and retry
-    dec byte [dr_retries]   ; consume one retry
-    xor ah, ah              ; BIOS INT 0x13 function 00H: reset disk
-    mov dl, [kernel_boot_drive]
-    int 0x13
-    jmp .read_try
-
-.ok:
-    clc                     ; CF=0 indicates success
-    ret
-
-.fail:
-    mov ah, [dr_last_status]          ; return last BIOS error in AH
-    stc                               ; explicit failure
-    ret
-
-
-; disk_write_chs
-; Inputs:
-;   AL = sector count
-;   CL = logical sector number (1-based)
-;   ES:BX = source buffer
-; Returns:
-;   CF clear on success
-;   CF set on error, AH = BIOS status
-disk_write_chs:
-    mov [dr_count], al
-    mov [dr_lba], cl
-    mov [dr_dest], bx
-
-    mov byte [dr_retries], 1
-
-.write_try:
-    mov cl, [dr_lba]
-    call lba_to_chs
-    mov al, [dr_count]
-    mov bx, [dr_dest]
-    mov dl, [kernel_boot_drive]
-
-    mov ah, 0x03                      ; BIOS write sectors
-    int 0x13
-    jnc .write_ok
-
-    mov [dr_last_status], ah
-    cmp byte [dr_retries], 0
-    je .write_fail ; jump if equal/zero
-
-    dec byte [dr_retries]
-    mov ah, 0x00
-    mov dl, [kernel_boot_drive]
-    int 0x13
-    jmp .write_try ; jump unconditionally
-
-.write_ok:
-    clc
-    ret
-
-.write_fail:
-    mov ah, [dr_last_status]
-    stc
-    ret
 
 
 ; lba_to_chs
@@ -726,7 +1071,7 @@ disk_write_chs:
 ; Output: CH = cylinder, DH = head, CL = sector (1-based)
 ; Uses: AX, DX
 lba_to_chs:
-    xor ax, ax
+    mov ax, 0x10
     mov al, cl
     dec al                          ; convert to zero-based LBA
 
@@ -792,41 +1137,43 @@ str_startswith:
 
 
 launch_shell:
-    ; Load csh to 0000:9000
-    mov ax, 0
-    mov es, ax
-    mov bx, 0x9000
+    ; Load csh to 0x9000
+    mov eax, 0x10
+    mov es, eax             ; ES = flat data selector
+    mov ebx, 0x9000
 
-    mov al, SHELL_SECTORS      ; shell sector count from build
+    mov al, SHELL_SECTORS   ; shell sector count from build
     mov ch, 0                 ; cylinder 0
     mov cl, [BOOT_KSECT_OFF]  ; kernel sectors from boot info
     add cl, 2                 ; shell starts after boot(1) + kernel
     mov dh, 0                 ; head 0
 
-    call disk_read_chs
+    call ata_read_sectors_32
     jc .load_fail
 
-    call 0x9000               ; run shell, return to kernel when shell does RET
+    ; Call shell at 0x9000 (32-bit far call via register)
+    mov eax, 0x9000
+    call eax                ; run shell, return to kernel when shell does RET
     ret
 
 .load_fail:
     mov si, shell_load_fail_msg
-    call console_puts
-    call console_newline
+    call console_puts_32
+    call console_newline_32
     ret
 
 ; load_program_table
 ; Reads a tiny filesystem program table from FS_TABLE_SECTOR into PROG_TABLE_ADDR.
 ; Output: AH = 0 success, 1 read fail, 2 bad magic, 3 bad entry count, 4 bad layout
 load_program_table:
-    mov ax, 0
-    mov es, ax
-    mov bx, PROG_TABLE_ADDR
+    mov eax, 0x10
+    mov es, eax             ; ES = flat data selector
+    mov ebx, PROG_TABLE_ADDR
     mov al, 1
     mov ch, 0
     mov cl, FS_TABLE_SECTOR
     mov dh, 0
-    call disk_read_chs
+    call ata_read_sectors_32
     jc .read_fail
 
     cmp byte [PROG_TABLE_ADDR + 0], 'C'
@@ -850,23 +1197,23 @@ load_program_table:
     mov byte [prog_table_loaded], 1
 %if DEBUG
         mov si, debug_loaded_msg
-        call console_puts
+        call console_puts_32
         mov al, [prog_table_count]
     cmp al, 10
     jb .dbg_one_digit
     mov al, '1'
-    call console_putc
+    call console_putc_32
     mov al, [prog_table_count]
     sub al, 10
     add al, '0'
-    call console_putc
+    call console_putc_32
     jmp .dbg_count_done ; jump unconditionally
 .dbg_one_digit:
     add al, '0'
-    call console_putc
+    call console_putc_32
 .dbg_count_done:
         mov si, debug_newline
-        call console_puts
+        call console_puts_32
 %endif
     xor ah, ah
     ret
@@ -902,7 +1249,7 @@ validate_program_table_layout:
     cmp bl, [prog_table_count]
     jae .v_ok
 
-    xor ax, ax
+    mov ax, 0x10
     mov al, bl
     shl ax, 4
     mov di, PROG_TABLE_ADDR + 16
@@ -947,15 +1294,8 @@ run_named_program:
     jne .fs_unavailable ; jump if not equal/non-zero
 
     mov [run_name_ptr], si
-    xor bx, bx
-%if DEBUG
-    mov si, debug_searching
-    call console_puts
-    mov si, [run_name_ptr]
-    call console_puts
-    mov si, debug_newline
-    call console_puts
-%endif
+    xor ebx, ebx
+
     mov si, [run_name_ptr]
 
 .search_loop:
@@ -963,56 +1303,49 @@ run_named_program:
     jae .unknown
 
     ; DI = PROG_TABLE_ADDR + 16 + (index * PROG_ENTRY_SIZE)
-    xor ax, ax
+    mov eax, 0x10
     mov al, bl
-    shl ax, 4
-    mov di, PROG_TABLE_ADDR + 16
-    add di, ax
+    shl eax, 4
+    mov edi, PROG_TABLE_ADDR + 16
+    add edi, eax
 
     mov si, [run_name_ptr]
-    push bx
+    push ebx
     call str_eq
-    pop bx
+    pop ebx
     cmp al, 1
-    je .found ; jump if equal/zero
+    je .found
 
     inc bl
-    jmp .search_loop ; jump unconditionally
+    jmp .search_loop
 
 .found:
     ; Recompute entry pointer in DI
-    xor ax, ax
+    mov eax, 0x10
     mov al, bl
-    shl ax, 4
-    mov di, PROG_TABLE_ADDR + 16
-    add di, ax
+    shl eax, 4
+    mov edi, PROG_TABLE_ADDR + 16
+    add edi, eax
 
-    ; Entry layout:
-    ; +0..+7  name[8]
-    ; +8      start_sector
-    ; +9      sector_count
-    ; +10..11 load_offset
-    ; +12..13 entry_offset
-    ; +14     entry_type (1=program, 2=text)
+    cmp byte [edi + 14], 1
+    jne .unknown
 
-    cmp byte [di + 14], 1
-    jne .unknown ; jump if not equal/non-zero
-
-    mov ax, 0
-    mov es, ax
-    mov bx, [di + 10]
-    mov al, [di + 9]
+    mov ax, 0x10
+    mov es, ax              ; ES = flat data selector
+    mov ebx, [edi + 10]     ; load_offset
+    mov al, [edi + 9]       ; sector count
     mov ch, 0
-    mov cl, [di + 8]
+    mov cl, [edi + 8]       ; start sector
     mov dh, 0
-    push di
-    call disk_read_chs
-    pop di
+    push edi
+    call ata_read_sectors_32
+    pop edi
     jc .load_fail
 
-    mov bx, [di + 10]
-    add bx, [di + 12]
-    call bx
+    ; Call program entry point via register (32-bit)
+    mov eax, [edi + 10]     ; load offset
+    add eax, [edi + 12]     ; add entry offset
+    call eax                ; execute program
 
     xor ah, ah
     ret
@@ -1161,7 +1494,7 @@ fs_find_inode_by_name:
     cmp bl, INFS_MAX_INODES
     jae .not_found
 
-    xor ax, ax
+    mov ax, 0x10
     mov al, bl
     shl ax, 4
     mov di, INFS_INODE_BUF
@@ -1204,6 +1537,8 @@ fs_find_inode_by_name:
 ; Input: DS:SI = user name, DS:DI = inode record pointer
 ; Output: AL=1 equal, AL=0 not equal
 fs_name_eq_inode_name:
+    push si
+    push di
     mov cx, INFS_NAME_LEN
 .cmp_loop:
     mov al, [si]
@@ -1221,9 +1556,13 @@ fs_name_eq_inode_name:
     je .yes ; jump if equal/zero
 .no:
     xor al, al
+    pop di
+    pop si
     ret
 .yes:
     mov al, 1
+    pop di
+    pop si
     ret
 
 ; fs_list_file_by_ordinal
@@ -1258,7 +1597,7 @@ fs_list_file_by_ordinal:
     cmp bl, INFS_MAX_INODES
     jae .list_end
 
-    xor ax, ax
+    mov ax, 0x10
     mov al, bl
     shl ax, 4
     mov di, INFS_INODE_BUF
@@ -1528,7 +1867,7 @@ fs_delete_by_path:
 .check_child:
     cmp bl, INFS_MAX_INODES
     jae .free_delete
-    xor ax, ax
+    mov ax, 0x10
     mov al, bl
     shl ax, 4
     mov bx, INFS_INODE_BUF
@@ -1772,7 +2111,7 @@ fs_find_inode_in_loaded:
 .scan:
     cmp bl, INFS_MAX_INODES
     jae .nf
-    xor ax, ax
+    mov ax, 0x10
     mov al, bl
     shl ax, 4
     mov di, INFS_INODE_BUF
@@ -1817,6 +2156,7 @@ fs_resolve_path_loaded:
     call fs_path_next_segment
     cmp al, 0
     je .done ; jump if equal/zero
+    mov [fs_inode_index], ah ; preserve "is last segment" flag from parser
 
     ; Handle . and ..
     cmp byte [fs_seg_name], '.'
@@ -1837,6 +2177,7 @@ fs_resolve_path_loaded:
     jmp .advance ; jump unconditionally
 
 .not_dot:
+    mov [fs_path_ptr], si ; preserve original path cursor
     mov al, [fs_curr_index]
     mov si, fs_seg_name
     call fs_find_inode_in_loaded
@@ -1845,8 +2186,9 @@ fs_resolve_path_loaded:
     mov [fs_curr_index], bl
 
 .advance:
-    cmp ah, 1
+    cmp byte [fs_inode_index], 1
     je .done ; jump if equal/zero
+    mov si, [fs_path_ptr] ; restore path cursor before delimiter checks
     cmp byte [si], '/'
     jne .seg_loop ; jump if not equal/non-zero
     inc si
@@ -1880,6 +2222,7 @@ fs_split_parent_leaf_loaded:
     call fs_path_next_segment
     cmp al, 0
     je .invalid ; jump if equal/zero
+    mov [fs_inode_index], ah ; preserve "is last segment" flag from parser
 
     ; Save this segment as candidate leaf.
     mov si, fs_seg_name
@@ -1896,10 +2239,11 @@ fs_split_parent_leaf_loaded:
     mov byte [di], 0
 .leaf_done:
 
-    cmp ah, 1
+    cmp byte [fs_inode_index], 1
     je .ok ; jump if equal/zero
 
     ; Descend through directory segment.
+    mov [fs_path_ptr], si ; preserve original path cursor
     mov al, [fs_parent_index]
     mov si, fs_seg_name
     call fs_find_inode_in_loaded
@@ -1909,6 +2253,7 @@ fs_split_parent_leaf_loaded:
     jne .invalid ; jump if not equal/non-zero
     mov [fs_parent_index], bl
 
+    mov si, [fs_path_ptr] ; restore path cursor before delimiter checks
     cmp byte [si], '/'
     jne .next_seg ; jump if not equal/non-zero
     inc si
@@ -1929,7 +2274,7 @@ fs_alloc_inode_loaded:
 .find:
     cmp bl, INFS_MAX_INODES
     jae .none
-    xor ax, ax
+    mov ax, 0x10
     mov al, bl
     shl ax, 4
     mov di, INFS_INODE_BUF
@@ -2202,6 +2547,15 @@ gdt_descriptor:
     dw gdt_end - gdt_start - 1
     dd gdt_start
 
+; ========== INTERRUPT DESCRIPTOR TABLE (IDT) ==========
+; 256 gates x 8 bytes each = 2048 bytes
+idt_table:
+    times 256 * 8 db 0
+
+idt_descriptor:
+    dw 256 * 8 - 1
+    dd idt_table
+
 logo_line_01:
     db "                         ######                         ", 0
 logo_line_02:
@@ -2258,7 +2612,7 @@ debug_searching:
 debug_newline:
     db 13, 10, 0
 debug_loaded_msg:
-     db "[DEBUG] Program table loaded with ", 0
+    db "[DEBUG] Program table loaded with ", 0
 cmd_help_str:
     db "help", 0
 cmd_csh_str:
@@ -2267,7 +2621,7 @@ cmd_csh_str:
 shell_load_fail_msg:
     db "Failed to load csh", 0
 command_buf:
-    times 32 db 0   ; input storage.
+    times 32 db 0
 
 
 

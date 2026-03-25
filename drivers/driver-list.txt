@@ -1,0 +1,113 @@
+List of drivers (yes this was ai generated)
+
+🔹 Core Platform & Interrupt Infrastructure
+GDT management
+IDT management
+8259 PIC
+Local APIC
+I/O APIC
+PIT
+HPET
+TSC calibration
+CMOS / RTC
+ACPI parser
+SMP (multi-core startup, AP bring-up)
+PCI bus driver
+PCIe extended configuration access
+DMA subsystem
+IOMMU (optional but modern PCIe needs it)
+🔹 Storage
+ATA (PIO mode)
+ATA DMA (Bus Master IDE)
+AHCI (SATA)
+NVMe (PCIe SSDs)
+USB Mass Storage
+ATAPI (optical drives)
+🔹 Filesystem Drivers
+FAT32
+exFAT
+ISO9660
+Your native filesystem
+🔹 Graphics
+VGA text mode
+VESA BIOS Extensions (framebuffer fallback)
+Linear framebuffer driver
+Basic 2D GPU acceleration layer
+Intel integrated GPU driver
+AMD GPU driver
+NVIDIA GPU driver
+
+Realistically you might only implement one vendor first.
+
+🔹 Input
+PS/2 controller (8042)
+PS/2 keyboard
+PS/2 mouse
+USB HID driver
+USB tablet / advanced pointer support
+Game controller (optional but modern)
+🔹 USB Subsystem
+UHCI
+OHCI
+EHCI
+xHCI
+USB core stack
+USB hub driver
+USB HID class
+USB mass storage class
+USB CDC (serial devices)
+USB audio class
+
+USB alone is nearly a mini-kernel.
+
+🔹 Networking – Ethernet
+RTL8139 driver
+Intel e1000 driver
+Intel e1000e driver
+Realtek 8169 driver
+
+You usually support a few popular chipsets.
+
+🔹 Networking – Wi-Fi
+
+Wi-Fi is much harder than Ethernet.
+
+PCIe Wi-Fi device driver (specific chipset, e.g. Intel)
+Firmware loader for Wi-Fi chipset
+802.11 MAC layer implementation
+WPA2/WPA3 crypto support
+RF kill switch handling
+Power management for wireless
+
+Most hobby OSes never reach this stage.
+
+🔹 Networking Stack (Protocol Layer)
+ARP
+IPv4
+ICMP
+UDP
+TCP
+DHCP
+DNS resolver
+Basic routing
+Socket API
+TLS (if you want modern internet)
+🔹 Audio
+PC speaker
+AC’97 driver
+Intel HD Audio driver
+🔹 Power & System
+APM (legacy)
+ACPI power states
+Battery management
+Thermal sensors
+CPU frequency scaling
+🔹 Misc Modern Hardware
+SMBus driver
+LPC controller
+SPI controller
+Embedded controller interface
+TPM (optional but modern PCs include it)
+🔹 Debug & Development
+Serial port (16550 UART)
+Framebuffer console

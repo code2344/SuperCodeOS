@@ -11,7 +11,7 @@ SYS_FS_LIST equ 0x0B ; kernel filesystem list syscall
 INFS_TYPE_DIR equ 2
 
 start:
-    xor ax, ax
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
 
@@ -25,7 +25,7 @@ start:
     mov al, [entry_index]      ; get current file ordinal
     mov bx, name_buf           ; output buffer for filename
     mov ah, SYS_FS_LIST        ; issue filesystem list syscall
-    int SYSCALL_INT            ; CX returns file size, DL returns type
+    int SYSCALL_INT            ; CX returns file size, DL returns type (file/dir) on success, AH=1 means end of listing, AH=0 means success, other AH values indicate errors
 
     cmp ah, 0       ; success?
     je .print_one

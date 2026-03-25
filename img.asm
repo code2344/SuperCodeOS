@@ -73,7 +73,7 @@ start:
     call blit_image_to_vram ; blast 320*200 pixels to graphics memory
 
     ; Wait for user to press a key before exiting
-    xor ax, ax              ; BIOS INT 0x16 function 00: wait for keystroke
+    mov ax, 0x10              ; BIOS INT 0x16 function 00: wait for keystroke
     int 0x16
 
     ; Return to text mode (80x25 color text)
@@ -155,7 +155,7 @@ vga_load_palette:
     loop .colour_loop       ; repeat for all 256 colors
 
     ; Restore DS for program's normal memory access
-    xor ax, ax
+    mov ax, 0x10
     mov ds, ax
     ret
 
@@ -175,7 +175,7 @@ blit_image_to_vram:
     rep movsb               ; bulk copy SI->DI, CX times (copies bytes)
 
     ; Restore DS for program labels and syscalls
-    xor ax, ax
+    mov ax, 0x10
     mov ds, ax
     ret
 

@@ -10,7 +10,7 @@
 ; - Script execution: ARC interpreter loads script file, executes line-by-line
 ; - All commands fall back to sys_run for builtin/program execution
 
-[BITS 16]
+[BITS 32]
 [ORG 0x9000]
 
 SYSCALL_INT equ 0x80
@@ -29,8 +29,8 @@ CTRL_C equ 0x03
 ARC_BUF_SIZE equ 1024
 
 start:
-    xor ax, ax
-    mov ds, ax              ; DS = 0: direct memory access to entire address space
+    mov ax, 0x10
+    mov ds, ax              ; DS = 0x10: direct memory access to entire address space
 
     mov si, shell_banner    ; SI -> welcome message
     call sys_puts           ; print "Circle Shell interactive mode v0.1.22"
@@ -358,7 +358,7 @@ start:
     cmp byte [si], 0
     je .cmd_cat_usage       ; path missing
 
-    xor ax, ax              ; SYS_FS_READ expects output buffer in ES:BX
+    mov ax, 0x10              ; SYS_FS_READ expects output buffer in ES:BX
     mov es, ax              ; ensure ES points at segment 0 (where arc_buf lives)
     mov bx, arc_buf         ; reuse script buffer as file read buffer
     call sys_fs_read        ; AH=status, CX=bytes read on success

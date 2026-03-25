@@ -15,7 +15,7 @@ CTRL_C equ 0x03
 FILE_BUF_SIZE equ 1024
 
 start:
-    xor ax, ax
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
 

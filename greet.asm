@@ -9,7 +9,7 @@ SYSCALL_INT equ 0x80
 SYS_PUTS equ 0x02
 
 start:
-    mov ax, cs         ; load code segment to access message strings in CS
+    mov ax, 0x10         ; load code segment to access message strings in CS
     mov ds, ax         ; set data segment to CS
     mov es, ax         ; set extra segment to CS
 

@@ -9,7 +9,7 @@ SYS_PUTC equ 0x01
 SYS_PUTS equ 0x02
 
 start:
-    mov ax, cs         ; load code segment to access message strings
+    mov ax, 0x10         ; load code segment to access message strings
     mov ds, ax
     mov es, ax
 

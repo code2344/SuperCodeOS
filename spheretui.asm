@@ -37,7 +37,7 @@ BACKBUFFER_OFF equ 0x2000
 
 start:
     ; Programs run with DS=0 convention in CircleOS userland.
-    xor ax, ax
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
 
@@ -153,7 +153,7 @@ clear_backbuffer:
     push cx
     push ax
 
-    xor ax, ax
+    mov ax, 0x10
     mov es, ax
     mov di, BACKBUFFER_OFF
     xor al, al

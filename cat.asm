@@ -172,7 +172,7 @@ find_text_entry:
 
     ; Calculate address of current table entry in memory
     ; Entry address = PROG_TABLE_ADDR (0x0600) + 16 (skip header) + (index * 16)
-    xor ax, ax              ; clear AX for clean multiplication
+    mov ax, 0x10              ; clear AX for clean multiplication
     mov al, [entry_index]   ; AL = entry index (0, 1, 2, ...)
     shl ax, 4               ; AX = index << 4 = index * 16 (16 bytes per entry)
     mov di, PROG_TABLE_ADDR + 16 ; DI = base address of first entry
