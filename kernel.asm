@@ -528,6 +528,7 @@ console_clear_32:
 kbd_getc_32:
     push ecx
     push edx
+    push ebx
     
     ; Poll keyboard status port for key available
 .kbd_wait:
@@ -539,7 +540,58 @@ kbd_getc_32:
     ; Read key from data port
     mov edx, 0x60           ; kbd data port
     in al, dx
+
+    ; Ignore extended prefix bytes in this minimal decoder.
+    cmp al, 0xE0
+    je .kbd_wait
+
+    mov bl, al
+
+    ; Release scancode: update modifiers and continue waiting.
+    test bl, 0x80
+    jnz .kbd_release
+
+    ; Shift press (left/right).
+    cmp bl, 0x2A
+    je .kbd_shift_on
+    cmp bl, 0x36
+    je .kbd_shift_on
+
+    ; Translate scancode to ASCII.
+    movzx ebx, bl
+    cmp byte [kbd_shift_state], 0
+    je .kbd_normal
+    mov al, [kbd_ascii_shift + ebx]
+    jmp .kbd_emit ; jump unconditionally
+
+.kbd_normal:
+    mov al, [kbd_ascii + ebx]
+
+.kbd_emit:
+    cmp al, 0
+    je .kbd_wait
+    pop ebx
+    pop edx
+    pop ecx
+    ret
+
+.kbd_release:
+    and bl, 0x7F
+    cmp bl, 0x2A
+    je .kbd_shift_off
+    cmp bl, 0x36
+    je .kbd_shift_off
+    jmp .kbd_wait ; jump unconditionally
+
+.kbd_shift_on:
+    mov byte [kbd_shift_state], 1
+    jmp .kbd_wait ; jump unconditionally
+
+.kbd_shift_off:
+    mov byte [kbd_shift_state], 0
+    jmp .kbd_wait ; jump unconditionally
     
+    pop ebx
     pop edx
     pop ecx
     ret
@@ -2797,6 +2849,24 @@ dr_retries:
     db 0
 dr_last_status:
     db 0
+
+kbd_shift_state:
+    db 0
+
+; Set-1 keyboard scancode -> ASCII maps.
+kbd_ascii:
+    db 0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 8, 9
+    db 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', 13, 0, 'a', 's'
+    db 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', 39, 96, 0, 92, 'z', 'x', 'c', 'v'
+    db 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
+    times (128 - ($ - kbd_ascii)) db 0
+
+kbd_ascii_shift:
+    db 0, 27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', 8, 9
+    db 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', 13, 0, 'A', 'S'
+    db 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', 34, 126, 0, 124, 'Z', 'X', 'C', 'V'
+    db 'B', 'N', 'M', '<', '>', '?', 0, '*', 0, ' '
+    times (128 - ($ - kbd_ascii_shift)) db 0
 
 prog_table_loaded:
     db 0
